@@ -1,12 +1,12 @@
 import os
-from forms import RegistrationForm, LoginForm, PrihodRashodForm, InvitationForm
-from models import db, Единица_измерения, Склады, Тип_документа, Товары, Запасы, ПриходРасход, User, Invitation, BlockchainBlock
 from flask import Flask, render_template, redirect, url_for, request, flash, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
+from forms import RegistrationForm, LoginForm, PrihodRashodForm, InvitationForm
 import hashlib
 from dotenv import load_dotenv
+from models import db, Единица_измерения, Склады, Тип_документа, Товары, Запасы, ПриходРасход, User, Invitation, BlockchainBlock
 import logging
 from logging.handlers import RotatingFileHandler
 from logging import Formatter, StreamHandler, DEBUG
@@ -623,37 +623,10 @@ class Node:
         return hashlib.sha256(data.encode('utf-8')).hexdigest()
 
 # Создаем узлы блокчейна
-# Конфигурация узлов
-base_domain = os.getenv('BASE_DOMAIN', 'amvera-artemation-cnpg-blockchain-invent-rw')
-
 nodes = {
-    0: Node(
-        node_id=0,
-        peers={
-            1: {'host': base_domain, 'port': int(os.getenv('NODE_1_PORT', 5001))},
-            2: {'host': base_domain, 'port': int(os.getenv('NODE_2_PORT', 5002))}
-        },
-        host=base_domain,
-        port=int(os.getenv('NODE_0_PORT', 5000))
-    ),
-    1: Node(
-        node_id=1,
-        peers={
-            0: {'host': base_domain, 'port': int(os.getenv('NODE_0_PORT', 5000))},
-            2: {'host': base_domain, 'port': int(os.getenv('NODE_2_PORT', 5002))}
-        },
-        host=base_domain,
-        port=int(os.getenv('NODE_1_PORT', 5001))
-    ),
-    2: Node(
-        node_id=2,
-        peers={
-            0: {'host': base_domain, 'port': int(os.getenv('NODE_0_PORT', 5000))},
-            1: {'host': base_domain, 'port': int(os.getenv('NODE_1_PORT', 5001))}
-        },
-        host=base_domain,
-        port=int(os.getenv('NODE_2_PORT', 5002))
-    )
+    0: Node(0, {1: {'host': 'localhost', 'port': 5001}, 2: {'host': 'localhost', 'port': 5002}}, 'localhost', 5000),
+    1: Node(1, {0: {'host': 'localhost', 'port': 5000}, 2: {'host': 'localhost', 'port': 5002}}, 'localhost', 5001),
+    2: Node(2, {0: {'host': 'localhost', 'port': 5000}, 1: {'host': 'localhost', 'port': 5001}}, 'localhost', 5002)
 }
 
 for node_id, node in nodes.items():
@@ -1441,14 +1414,15 @@ def get_item_info(item_id):
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)})
 
+
 if __name__ == '__main__':
     import sys
 
-    # Параметр по умолчанию - узел 0 на порту 5000
+    # Параметры узла по умолчанию
     node_id = 0
     port = 5000
 
-    # Проверяем аргументы командной строки
+    # Аргументы командной строки (для локального тестирования)
     if len(sys.argv) > 1:
         try:
             node_id = int(sys.argv[1])
@@ -1461,97 +1435,8 @@ if __name__ == '__main__':
             print("Ошибка: ID узла должен быть целым числом")
             sys.exit(1)
 
+    # Для Railway - используем порт из переменной окружения
+    port = int(os.environ.get('PORT', port))
+
     print(f"Запуск узла {node_id} на порту {port}")
-
-    # Настройка секретного ключа для сессий и CSRF защиты
-    app.config['SECRET_KEY'] = f'node_{node_id}_secret_key_{os.urandom(16).hex()}'
-
-    # Упрощенная конфигурация сессий
-    from flask_session import Session
-
-    app.config['SESSION_TYPE'] = 'filesystem'
-    app.config['SESSION_FILE_DIR'] = f'./flask_session_node_{node_id}'
-    app.config['SESSION_COOKIE_NAME'] = f'session_node_{node_id}'
-    app.config['SESSION_PERMANENT'] = False
-    app.config['SESSION_COOKIE_SECURE'] = True
-    app.config['SESSION_COOKIE_HTTPONLY'] = True
-    Session(app)
-
-    # Настройка CSRF защиты
-    csrf = CSRFProtect(app)
-    app.config['WTF_CSRF_ENABLED'] = True
-    app.config['WTF_CSRF_SSL_STRICT'] = True
-    app.config['WTF_CSRF_TIME_LIMIT'] = 3600
-
-
-    # Используем декоратор errorhandler вместо csrf.error_handler
-    @app.errorhandler(400)
-    def handle_csrf_error(e):
-        app.logger.error(f"CSRF Error: {e}")
-        flash("CSRF ошибка. Пожалуйста, обновите страницу и попробуйте снова.", 'danger')
-        return redirect(url_for('index'))
-
-
-    # Настройка логирования
-    from logging.handlers import RotatingFileHandler
-    from logging import Formatter
-
-    file_handler = RotatingFileHandler(f'app_node_{node_id}.log', maxBytes=1024 * 1024, backupCount=5)
-    file_handler.setFormatter(Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-    app.logger.addHandler(file_handler)
-
-    # Добавляем информацию о порте в контекст приложения
-    app.config['NODE_ID'] = node_id
-    app.config['NODE_PORT'] = port
-
-    with app.app_context():
-        # Существующий код инициализации БД
-        engine = db.engine
-        metadata = db.metadata
-        table_names = metadata.tables.keys()
-
-        # Проверка и создание генезис-блока, если таблица пуста
-        genesis_block_exists = BlockchainBlock.query.first() is not None
-
-        if not genesis_block_exists:
-            app.logger.info("Creating genesis block...")
-            genesis_block = Block(
-                index=0,
-                timestamp=datetime.datetime.now(),
-                transactions=[{"message": "Genesis Block"}],
-                previous_hash="0" * 64
-            )
-
-            db_genesis_block = BlockchainBlock(
-                index=genesis_block.index,
-                timestamp=genesis_block.timestamp,
-                transactions=json.dumps(genesis_block.transactions),
-                previous_hash=genesis_block.previous_hash,
-                hash=genesis_block.hash,
-                node_id=node_id
-            )
-
-            db.session.add(db_genesis_block)
-            db.session.commit()
-            app.logger.info(f"Genesis block created with hash {genesis_block.hash}")
-
-        if not table_names:
-            app.logger.info("No tables found in database, creating tables...")
-            db.create_all()
-            app.logger.info("Database tables created successfully!")
-        else:
-            app.logger.info("Database tables already exist.")
-            app.logger.info(f"Existing tables: {', '.join(table_names)}")
-
-        #try:
-            #db.session.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT false"))
-            #db.session.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50)"))
-            #db.session.execute(text("UPDATE users SET is_admin = true WHERE username = 'admin'"))
-            #db.session.commit()
-            #app.logger.info("Обновление таблицы users выполнено успешно.")
-        #except Exception as e:
-            #db.session.rollback()
-            #app.logger.error(f"Ошибка при обновлении таблицы users: {e}")
-
-    # Запуск Flask с указанным портом
-    #app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(host='0.0.0.0', port=port)
