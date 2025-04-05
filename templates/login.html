@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Вход в систему</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        :root {
+            --primary-color: #4361ee;
+            --secondary-color: #3f37c9;
+            --accent-color: #4895ef;
+            --dark-color: #2b2d42;
+            --light-color: #f8f9fa;
+            --danger-color: #f72585;
+        }
+
+        body {
+            background-color: #f5f7fa;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #333;
+            line-height: 1.6;
+            display: flex;
+            min-height: 100vh;
+            align-items: center;
+        }
+
+        .auth-container {
+            max-width: 500px;
+            width: 100%;
+            margin: 0 auto;
+            padding: 30px;
+        }
+
+        .auth-card {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            padding: 30px;
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+
+        .auth-card:hover {
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+        }
+
+        .auth-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .auth-title {
+            color: var(--dark-color);
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+
+        .auth-logo {
+            width: 200px;
+            height: auto;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            font-weight: 600;
+            color: #555;
+            margin-bottom: 8px;
+            display: block;
+        }
+
+        .form-control {
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 12px 15px;
+            transition: all 0.3s;
+            box-shadow: none;
+            font-size: 15px;
+            line-height: 1.5;
+            height: auto;
+        }
+
+        .form-control:focus {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 0.2rem rgba(67, 97, 238, 0.15);
+        }
+
+        .btn {
+            border-radius: 8px;
+            padding: 12px 20px;
+            font-weight: 600;
+            transition: all 0.3s;
+            border: none;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+        }
+
+        .btn-primary:hover {
+            background-color: var(--secondary-color);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(67, 97, 238, 0.3);
+        }
+
+        .btn-block {
+            display: block;
+            width: 100%;
+        }
+
+        .auth-footer {
+            text-align: center;
+            margin-top: 20px;
+            color: #666;
+        }
+
+        .auth-footer a {
+            color: var(--primary-color);
+            font-weight: 600;
+        }
+
+        .password-toggle {
+            cursor: pointer;
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #666;
+            z-index: 5;
+        }
+
+        .password-container {
+            position: relative;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .fade-in {
+            animation: fadeIn 0.5s ease-out forwards;
+        }
+
+        .alert {
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="auth-container fade-in">
+        <div class="auth-card">
+            <div class="auth-header">
+                <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Логотип" class="auth-logo">
+                <h2 class="auth-title">
+                    <i class="fas fa-sign-in-alt mr-2"></i>Вход в систему
+                </h2>
+            </div>
+
+            {% if error %}
+                <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                    <i class="fas fa-exclamation-circle mr-2"></i>
+                    {{ error }}
+                    <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+            {% endif %}
+
+            <form method="POST" class="needs-validation" novalidate>
+                {{ form.csrf_token }}
+
+                <div class="form-group">
+                    {{ form.username.label(class="form-label") }}
+                    <div class="input-group">
+                        <div class="input-group-prepend">
+                            <span class="input-group-text"><i class="fas fa-user"></i></span>
+                        </div>
+                        {{ form.username(class="form-control", id="username", placeholder="Введите имя пользователя") }}
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    {{ form.password.label(class="form-label") }}
+                    <div class="password-container">
+                        <div class="input-group">
+                            <div class="input-group-prepend">
+                                <span class="input-group-text"><i class="fas fa-lock"></i></span>
+                            </div>
+                            {{ form.password(class="form-control", id="password", placeholder="Введите пароль") }}
+                        </div>
+                        <i class="fas fa-eye password-toggle" id="togglePassword"></i>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-block mt-4">
+                    <i class="fas fa-sign-in-alt mr-2"></i>Войти
+                </button>
+
+                <div class="auth-footer mt-4">
+                    Нет аккаунта? <a href="{{ url_for('register') }}">Зарегистрироваться</a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    <script>
+        // Показать/скрыть пароль
+        const togglePassword = document.querySelector('#togglePassword');
+        const password = document.querySelector('#password');
+
+        if (togglePassword && password) {
+            togglePassword.addEventListener('click', function() {
+                const type = password.getAttribute('type') === 'password' ? 'text' : 'password';
+                password.setAttribute('type', type);
+                this.classList.toggle('fa-eye-slash');
+            });
+        }
+    </script>
+</body>
+</html>

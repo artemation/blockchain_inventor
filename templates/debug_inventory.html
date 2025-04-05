@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2>Отладка таблицы "Запасы"</h2>
+    
+    <div class="alert alert-info">
+        Всего записей в таблице "Запасы": {{ count }}
+    </div>
+    
+    {% if inventory_data %}
+    <table class="table table-striped">
+        <thead>
+            <tr>
+                <th>ID Склада</th>
+                <th>Склад</th>
+                <th>ID Товара</th>
+                <th>Товар</th>
+                <th>Количество</th>
+                <th>Единица измерения</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in inventory_data %}
+            <tr>
+                <td>{{ item.склад_id }}</td>
+                <td>{{ item.склад }}</td>
+                <td>{{ item.товар_id }}</td>
+                <td>{{ item.товар }}</td>
+                <td>{{ item.количество }}</td>
+                <td>{{ item.единица }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="alert alert-warning">
+        Записи не найдены в таблице "Запасы"
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

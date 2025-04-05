@@ -1,0 +1,226 @@
+{% extends 'base.html' %}
+
+{% block title %}Отчет по запасам{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1 class="mt-4 mb-4">Отчет по запасам</h1>
+    
+    <div class="row">
+        <div class="col-md-12">
+            <div class="card mb-4">
+                <div class="card-header bg-primary text-white">
+                    <h3 class="card-title mb-0">Общие запасы по товарам</h3>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Товар</th>
+                                    <th class="text-right">Общее количество</th>
+                                    <th>Ед. измерения</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for product_id, product_data in total_by_product.items() %}
+                                <tr>
+                                    <td>{{ product_data.product_name }}</td>
+                                    <td class="text-right {% if product_data.total_quantity == 0 %}text-danger font-weight-bold{% endif %}">
+                                        {{ product_data.total_quantity }}
+                                    </td>
+                                    <td>{{ product_data.unit }}</td>
+                                </tr>
+                                {% else %}
+                                <tr>
+                                    <td colspan="3" class="text-center">Нет данных</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="row">
+        <div class="col-md-12">
+            <div class="card mb-4">
+                <div class="card-header bg-success text-white">
+                    <h3 class="card-title mb-0">Запасы по складам</h3>
+                </div>
+                <div class="card-body">
+                    <div class="accordion" id="warehouseAccordion">
+                        {% for warehouse_id, warehouse_data in total_by_warehouse.items() %}
+                        <div class="card">
+                            <div class="card-header" id="heading{{ warehouse_id }}">
+                                <h2 class="mb-0">
+                                    <button class="btn btn-link" type="button" data-toggle="collapse" 
+                                            data-target="#collapse{{ warehouse_id }}" aria-expanded="true" 
+                                            aria-controls="collapse{{ warehouse_id }}">
+                                        {{ warehouse_data.warehouse_name }} 
+                                        <span class="badge badge-pill badge-info ml-2">
+                                            {{ warehouse_data.total_products }} товаров
+                                        </span>
+                                    </button>
+                                </h2>
+                            </div>
+                            <div id="collapse{{ warehouse_id }}" class="collapse" 
+                                 aria-labelledby="heading{{ warehouse_id }}" data-parent="#warehouseAccordion">
+                                <div class="card-body">
+                                    <table class="table table-sm table-bordered">
+                                        <thead>
+                                            <tr>
+                                                <th>Товар</th>
+                                                <th class="text-right">Количество</th>
+                                                <th>Ед. измерения</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for product_id, product_data in warehouse_data.products.items() %}
+                                            <tr>
+                                                <td>{{ product_data.product_name }}</td>
+                                                <td class="text-right {% if product_data.quantity == 0 %}text-danger font-weight-bold{% endif %}">
+                                                    {{ product_data.quantity }}
+                                                </td>
+                                                <td>{{ product_data.unit }}</td>
+                                            </tr>
+                                            {% else %}
+                                            <tr>
+                                                <td colspan="3" class="text-center">Нет товаров на складе</td>
+                                            </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                        {% else %}
+                        <div class="alert alert-info">Нет данных по складам</div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="row">
+        <div class="col-md-6">
+            <div class="card mb-4">
+                <div class="card-header bg-warning">
+                    <h3 class="card-title mb-0">Последние транзакции</h3>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>Дата</th>
+                                    <th>Товар</th>
+                                    <th>Кол-во</th>
+                                    <th>Документ</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for transaction in latest_transactions %}
+                                <tr>
+                                    <td>{{ transaction.ПриходРасход.Timestamp.strftime('%d.%m.%Y %H:%M') }}</td>
+                                    <td>{{ transaction.product_name }}</td>
+                                    <td>{{ transaction.ПриходРасход.Количество }} {{ transaction.unit }}</td>
+                                    <td>{{ transaction.document_type }}</td>
+                                </tr>
+                                {% else %}
+                                <tr>
+                                    <td colspan="4" class="text-center">Нет транзакций</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-6">
+            <div class="card mb-4">
+                <div class="card-header bg-danger text-white">
+                    <h3 class="card-title mb-0">Отсутствующие товары</h3>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>Склад</th>
+                                    <th>Товар</th>
+                                    <th>Последнее обновление</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for item in zero_inventory %}
+                                <tr>
+                                    <td>{{ item.warehouse_name }}</td>
+                                    <td>{{ item.product_name }}</td>
+                                    <td>{{ item.last_update|default('Никогда') }}</td>
+                                </tr>
+                                {% else %}
+                                <tr>
+                                    <td colspan="3" class="text-center">Все товары в наличии</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="row">
+        <div class="col-md-12">
+            <div class="card mb-4">
+                <div class="card-header bg-info text-white">
+                    <h3 class="card-title mb-0">Детализация запасов</h3>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-striped table-hover table-sm">
+                            <thead>
+                                <tr>
+                                    <th>Склад</th>
+                                    <th>Товар</th>
+                                    <th class="text-right">Количество</th>
+                                    <th>Ед. измерения</th>
+                                    <th>Последнее обновление</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for запас, склад, товар, ед_измерения in inventory_data %}
+                                <tr>
+                                    <td>{{ склад.Название }}</td>
+                                    <td>{{ товар.Наименование }}</td>
+                                    <td class="text-right {% if запас.Количество == 0 %}text-danger font-weight-bold{% endif %}">
+                                        {{ запас.Количество }}
+                                    </td>
+                                    <td>{{ ед_измерения.Единица_Измерения }}</td>
+                                    <td>{{ запас.Дата_обновления.strftime('%d.%m.%Y') }}</td>
+                                </tr>
+                                {% else %}
+                                <tr>
+                                    <td colspan="5" class="text-center">Нет данных</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="text-center mb-4">
+        <a href="{{ url_for('index') }}" class="btn btn-secondary">Вернуться на главную</a>
+    </div>
+</div>
+{% endblock %}

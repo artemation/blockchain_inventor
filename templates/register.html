@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Регистрация</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        :root {
+            --primary-color: #4361ee;
+            --secondary-color: #3f37c9;
+            --accent-color: #4895ef;
+            --dark-color: #2b2d42;
+            --light-color: #f8f9fa;
+            --success-color: #4cc9f0;
+            --danger-color: #f72585;
+            --warning-color: #f8961e;
+        }
+
+        body {
+            background-color: #f5f7fa;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #333;
+            line-height: 1.6;
+            display: flex;
+            min-height: 100vh;
+            align-items: center;
+        }
+
+        .auth-container {
+            max-width: 500px;
+            width: 100%;
+            margin: 0 auto;
+            padding: 30px;
+        }
+
+        .auth-card {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            padding: 30px;
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+
+        .auth-card:hover {
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+        }
+
+        .auth-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .auth-title {
+            color: var(--dark-color);
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+
+        .auth-logo {
+            width: 200px;
+            height: auto;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            font-weight: 600;
+            color: #555;
+            margin-bottom: 8px;
+            display: block;
+        }
+
+        .form-control {
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 12px 15px;
+            transition: all 0.3s;
+            box-shadow: none;
+            font-size: 15px;
+            line-height: 1.5;
+            height: auto;
+        }
+
+        .form-control:focus {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 0.2rem rgba(67, 97, 238, 0.15);
+        }
+
+        .btn {
+            border-radius: 8px;
+            padding: 12px 20px;
+            font-weight: 600;
+            transition: all 0.3s;
+            border: none;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+        }
+
+        .btn-primary:hover {
+            background-color: var(--secondary-color);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(67, 97, 238, 0.3);
+        }
+
+        .btn-block {
+            display: block;
+            width: 100%;
+        }
+
+        .auth-footer {
+            text-align: center;
+            margin-top: 20px;
+            color: #666;
+        }
+
+        .auth-footer a {
+            color: var(--primary-color);
+            font-weight: 600;
+        }
+
+        .input-group-text {
+            background-color: #f8f9fa;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+        }
+
+        .password-toggle {
+            cursor: pointer;
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #666;
+            z-index: 5;
+        }
+
+        .password-container {
+            position: relative;
+        }
+
+        /* Анимации */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .fade-in {
+            animation: fadeIn 0.5s ease-out forwards;
+        }
+
+        /* Ошибки формы */
+        .invalid-feedback {
+            color: var(--danger-color);
+            font-size: 0.85rem;
+            margin-top: 5px;
+        }
+
+        .is-invalid {
+            border-color: var(--danger-color) !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="auth-container fade-in">
+        <div class="auth-card">
+            <div class="auth-header">
+                <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Логотип" class="auth-logo">
+                <h2 class="auth-title">
+                    <i class="fas fa-user-plus mr-2"></i>Регистрация
+                </h2>
+            </div>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                            <i class="fas fa-{% if category == 'success' %}check-circle{% elif category == 'danger' %}exclamation-circle{% else %}info-circle{% endif %} mr-2"></i>
+                            {{ message }}
+                            <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                                <span aria-hidden="true">&times;</span>
+                            </button>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
+            <form method="POST" class="needs-validation" novalidate>
+                {{ form.csrf_token }}
+
+                <div class="form-group">
+                    {{ form.username.label(class="form-label") }}
+                    <div class="input-group">
+                        <div class="input-group-prepend">
+                            <span class="input-group-text"><i class="fas fa-user"></i></span>
+                        </div>
+                        {{ form.username(class="form-control", id="username", placeholder="Введите имя пользователя") }}
+                    </div>
+                    {% if form.username.errors %}
+                        <div class="invalid-feedback">
+                            {{ form.username.errors[0] }}
+                        </div>
+                    {% endif %}
+                </div>
+
+                <div class="form-group">
+                    {{ form.password.label(class="form-label") }}
+                    <div class="password-container">
+                        <div class="input-group">
+                            <div class="input-group-prepend">
+                                <span class="input-group-text"><i class="fas fa-lock"></i></span>
+                            </div>
+                            {{ form.password(class="form-control", id="password", placeholder="Введите пароль") }}
+                        </div>
+                        <i class="fas fa-eye password-toggle" id="togglePassword"></i>
+                        {% if form.password.errors %}
+                            <div class="invalid-feedback">
+                                {{ form.password.errors[0] }}
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    {{ form.confirm_password.label(class="form-label") }}
+                    <div class="password-container">
+                        <div class="input-group">
+                            <div class="input-group-prepend">
+                                <span class="input-group-text"><i class="fas fa-lock"></i></span>
+                            </div>
+                            {{ form.confirm_password(class="form-control", id="confirm_password", placeholder="Подтвердите пароль") }}
+                        </div>
+                        <i class="fas fa-eye password-toggle" id="toggleConfirmPassword"></i>
+                        {% if form.confirm_password.errors %}
+                            <div class="invalid-feedback">
+                                {{ form.confirm_password.errors[0] }}
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    {{ form.role.label(class="form-label") }}
+                    <div class="input-group">
+                        <div class="input-group-prepend">
+                            <span class="input-group-text"><i class="fas fa-user-tag"></i></span>
+                        </div>
+                        {{ form.role(class="form-control", id="role") }}
+                    </div>
+                    {% if form.role.errors %}
+                        <div class="invalid-feedback">
+                            {{ form.role.errors[0] }}
+                        </div>
+                    {% endif %}
+                </div>
+
+                <div class="form-group">
+                    {{ form.invitation_code.label(class="form-label") }}
+                    <div class="input-group">
+                        <div class="input-group-prepend">
+                            <span class="input-group-text"><i class="fas fa-key"></i></span>
+                        </div>
+                        {{ form.invitation_code(class="form-control", id="invitation_code", placeholder="Введите код приглашения") }}
+                    </div>
+                    {% if form.invitation_code.errors %}
+                        <div class="invalid-feedback">
+                            {{ form.invitation_code.errors[0] }}
+                        </div>
+                    {% endif %}
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-block mt-4">
+                    <i class="fas fa-user-plus mr-2"></i>Зарегистрироваться
+                </button>
+
+                <div class="auth-footer mt-4">
+                    Уже есть аккаунт? <a href="{{ url_for('login') }}">Войти</a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    <script>
+        // Показать/скрыть пароль
+        const togglePassword = document.querySelector('#togglePassword');
+        const toggleConfirmPassword = document.querySelector('#toggleConfirmPassword');
+        const password = document.querySelector('#password');
+        const confirmPassword = document.querySelector('#confirm_password');
+
+        if (togglePassword && password) {
+            togglePassword.addEventListener('click', function() {
+                const type = password.getAttribute('type') === 'password' ? 'text' : 'password';
+                password.setAttribute('type', type);
+                this.classList.toggle('fa-eye-slash');
+            });
+        }
+
+        if (toggleConfirmPassword && confirmPassword) {
+            toggleConfirmPassword.addEventListener('click', function() {
+                const type = confirmPassword.getAttribute('type') === 'password' ? 'text' : 'password';
+                confirmPassword.setAttribute('type', type);
+                this.classList.toggle('fa-eye-slash');
+            });
+        }
+
+        // Валидация формы
+        (function() {
+            'use strict';
+            window.addEventListener('load', function() {
+                var forms = document.getElementsByClassName('needs-validation');
+                var validation = Array.prototype.filter.call(forms, function(form) {
+                    form.addEventListener('submit', function(event) {
+                        if (form.checkValidity() === false) {
+                            event.preventDefault();
+                            event.stopPropagation();
+                        }
+                        form.classList.add('was-validated');
+                    }, false);
+                });
+            }, false);
+        })();
+    </script>
+</body>
+</html>

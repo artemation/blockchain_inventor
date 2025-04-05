@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Блокчейн (PBFT)</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        :root {
+            --primary-color: #4361ee;
+            --secondary-color: #3f37c9;
+            --accent-color: #4895ef;
+            --dark-color: #2b2d42;
+            --light-color: #f8f9fa;
+            --success-color: #4cc9f0;
+            --danger-color: #f72585;
+            --warning-color: #f8961e;
+            --sidebar-width: 280px;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #f5f7fa;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            min-height: 100vh;
+            color: #333;
+            line-height: 1.6;
+        }
+
+        /* Стили для боковой панели (такие же как в index.html) */
+        .sidebar {
+            width: var(--sidebar-width);
+            background: linear-gradient(312deg, var(--dark-color), #2a2ab1);
+            padding: 20px 15px;
+            position: fixed;
+            height: 100%;
+            overflow-y: auto;
+            box-shadow: 2px 0 15px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s;
+            z-index: 1000;
+        }
+
+        .sidebar .logo-container {
+            text-align: center;
+            padding: 15px 0;
+            margin-bottom: 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .sidebar .logo {
+            width: 80%;
+            max-width: 180px;
+            height: auto;
+            border-radius: 0;
+            padding: 0;
+            background: none;
+            transition: all 0.3s;
+        }
+
+        .sidebar .logo:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 10px rgba(67, 97, 238, 0.7);
+        }
+
+        .sidebar .nav-link {
+            color: rgba(255, 255, 255, 0.8);
+            font-weight: 500;
+            margin-bottom: 8px;
+            padding: 12px 15px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            transition: all 0.3s;
+        }
+
+        .sidebar .nav-link i {
+            margin-right: 10px;
+            font-size: 1.1rem;
+            width: 24px;
+            text-align: center;
+        }
+
+        .sidebar .nav-link:hover {
+            color: white;
+            background: rgba(255, 255, 255, 0.1);
+            transform: translateX(5px);
+        }
+
+        .sidebar .nav-link.active {
+            background: var(--primary-color);
+            color: white;
+            box-shadow: 0 4px 12px rgba(67, 97, 238, 0.3);
+        }
+
+        /* Основной контент */
+        .main-content {
+            margin-left: var(--sidebar-width);
+            padding: 30px;
+            width: calc(100% - var(--sidebar-width));
+            transition: all 0.3s;
+        }
+
+        .page-header {
+            background: white;
+            padding: 25px 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .page-title {
+            color: var(--dark-color);
+            font-weight: 700;
+            margin: 0;
+            font-size: 1.8rem;
+        }
+
+        /* Стили для блоков */
+        .block-card {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            margin-bottom: 25px;
+            transition: transform 0.3s, box-shadow 0.3s;
+            border-left: 4px solid var(--primary-color);
+        }
+
+        .block-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+        }
+
+        .block-card.genesis-block {
+            border-left-color: var(--warning-color);
+        }
+
+        .block-header {
+            padding: 18px 25px;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-radius: 10px 10px 0 0 !important;
+        }
+
+        .block-title {
+            font-weight: 600;
+            color: var(--dark-color);
+            margin: 0;
+            display: flex;
+            align-items: center;
+        }
+
+        .block-body {
+            padding: 25px;
+        }
+
+        .block-meta {
+            display: flex;
+            flex-wrap: wrap;
+            margin-bottom: 15px;
+        }
+
+        .meta-item {
+            margin-right: 20px;
+            margin-bottom: 10px;
+        }
+
+        .meta-label {
+            font-weight: 600;
+            color: #666;
+            font-size: 0.85rem;
+            margin-bottom: 3px;
+        }
+
+        .meta-value {
+            font-weight: 500;
+        }
+
+        /* Стили для транзакций */
+        .transaction-card {
+            background: #f9fafc;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-left: 3px solid var(--accent-color);
+        }
+
+        .transaction-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px dashed #e0e0e0;
+        }
+
+        .transaction-title {
+            font-weight: 600;
+            margin: 0;
+            font-size: 1.1rem;
+        }
+
+        .transaction-body {
+            margin-top: 15px;
+        }
+
+        .transaction-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 15px;
+        }
+
+        .detail-item {
+            background: white;
+            padding: 12px;
+            border-radius: 6px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
+        }
+
+        .detail-label {
+            font-weight: 600;
+            color: #666;
+            font-size: 0.85rem;
+            margin-bottom: 5px;
+        }
+
+        .detail-value {
+            font-weight: 500;
+        }
+
+        /* Стили для бейджей */
+        .node-badge {
+            display: inline-block;
+            padding: 0.25em 0.6em;
+            font-size: 75%;
+            font-weight: 700;
+            line-height: 1;
+            text-align: center;
+            white-space: nowrap;
+            vertical-align: baseline;
+            border-radius: 0.25rem;
+            margin-left: 10px;
+        }
+
+        .node-0 { background-color: var(--primary-color); color: white; }
+        .node-1 { background-color: var(--success-color); color: white; }
+        .node-2 { background-color: var(--danger-color); color: white; }
+
+        .badge-genesis {
+            background-color: var(--warning-color);
+            color: white;
+        }
+
+        /* Стили для хэшей */
+        .hash-display {
+            font-family: monospace;
+            word-break: break-all;
+            background: #f5f5f5;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            display: inline-block;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .hash-full {
+            display: none;
+            word-break: break-all;
+            font-family: monospace;
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 5px;
+        }
+
+        /* JSON данные */
+        .code-json {
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            overflow-x: auto;
+            max-height: 200px;
+            overflow-y: auto;
+            font-size: 0.85rem;
+            margin-top: 15px;
+        }
+
+        /* Кнопки */
+        .btn {
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-weight: 600;
+            transition: all 0.3s;
+            border: none;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        .btn-sm {
+            padding: 6px 12px;
+            font-size: 0.85rem;
+        }
+
+        /* Адаптивность */
+        @media (max-width: 992px) {
+            .sidebar {
+                width: 80px;
+                overflow: hidden;
+            }
+
+            .sidebar .logo-container {
+                padding: 15px 5px;
+            }
+
+            .sidebar .logo {
+                width: 50px;
+            }
+
+            .sidebar .nav-link span {
+                display: none;
+            }
+
+            .sidebar .nav-link i {
+                margin-right: 0;
+                font-size: 1.3rem;
+            }
+
+            .main-content {
+                margin-left: 80px;
+                width: calc(100% - 80px);
+            }
+        }
+
+        @media (max-width: 768px) {
+            .page-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .transaction-details {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Боковая панель (такая же как в index.html) -->
+    <div class="sidebar">
+        <div class="logo-container">
+            <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Логотип" class="logo">
+        </div>
+        <nav class="navbar navbar-expand-lg navbar-dark">
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav flex-column">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('index') }}">
+                            <i class="fas fa-home"></i>
+                            <span>Главная</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link active" href="{{ url_for('view_blockchain') }}">
+                            <i class="fas fa-link"></i>
+                            <span>Блокчейн</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('admin_panel') }}">
+                            <i class="fas fa-cog"></i>
+                            <span>Администрирование</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('test_transaction') }}">
+                            <i class="fas fa-vial"></i>
+                            <span>Тест транзакции</span>
+                        </a>
+                    </li>
+                </ul>
+            </div>
+        </nav>
+    </div>
+
+    <!-- Основной контент -->
+    <div class="main-content">
+        <div class="page-header">
+            <h1 class="page-title">
+                <i class="fas fa-link mr-2"></i>Блокчейн (PBFT)
+            </h1>
+            <div>
+                <a href="{{ url_for('index') }}" class="btn btn-secondary">
+                    <i class="fas fa-arrow-left mr-2"></i>На главную
+                </a>
+                <a href="{{ url_for('view_blockchain') }}" class="btn btn-primary ml-2">
+                    <i class="fas fa-sync-alt mr-2"></i>Обновить
+                </a>
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        <i class="fas fa-{% if category == 'success' %}check-circle{% elif category == 'danger' %}exclamation-circle{% else %}info-circle{% endif %} mr-2"></i>
+                        {{ message }}
+                        <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                            <span aria-hidden="true">&times;</span>
+                        </button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        {% if blocks %}
+            {% for block in blocks %}
+                <div class="block-card {% if block.is_genesis %}genesis-block{% endif %}">
+                    <div class="block-header">
+                        <h3 class="block-title">
+                            Блок #{{ block.index }}
+                            <span class="node-badge node-{{ block.node_id }}">Узел {{ block.node_id }}</span>
+                            {% if block.is_genesis %}
+                                <span class="badge badge-genesis">Генезис-блок</span>
+                            {% endif %}
+                        </h3>
+                        <div>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="navigator.clipboard.writeText('{{ block.hash }}')">
+                                <i class="fas fa-copy mr-1"></i>Копировать хэш
+                            </button>
+                        </div>
+                    </div>
+                    <div class="block-body">
+                        <div class="block-meta">
+                            <div class="meta-item">
+                                <div class="meta-label">Время создания</div>
+                                <div class="meta-value">{{ block.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</div>
+                            </div>
+                            <div class="meta-item">
+                                <div class="meta-label">Хэш блока</div>
+                                <div class="meta-value">
+                                    <span class="hash-display" title="{{ block.hash }}" onclick="this.nextElementSibling.style.display='block'">
+                                        {{ block.hash[:8] }}...{{ block.hash[-8:] }}
+                                    </span>
+                                    <div class="hash-full">{{ block.hash }}</div>
+                                </div>
+                            </div>
+                            {% if not block.is_genesis %}
+                                <div class="meta-item">
+                                    <div class="meta-label">Предыдущий хэш</div>
+                                    <div class="meta-value">
+                                        <span class="hash-display" title="{{ block.previous_hash }}" onclick="this.nextElementSibling.style.display='block'">
+                                            {{ block.previous_hash[:8] }}...{{ block.previous_hash[-8:] }}
+                                        </span>
+                                        <div class="hash-full">{{ block.previous_hash }}</div>
+                                    </div>
+                                </div>
+                            {% endif %}
+                        </div>
+
+                        <h4 class="mb-3">
+                            <i class="fas fa-exchange-alt mr-2"></i>Транзакции
+                            <span class="badge badge-light">{{ block.transactions|length }}</span>
+                        </h4>
+
+                        {% if block.transactions %}
+                            {% for transaction in block.transactions %}
+                                <div class="transaction-card">
+                                    <div class="transaction-header">
+                                        <h5 class="transaction-title">
+                                            Транзакция #{{ loop.index }}
+                                        </h5>
+                                        {% if transaction.timestamp %}
+                                            <span class="text-muted">{{ transaction.timestamp }}</span>
+                                        {% endif %}
+                                    </div>
+                                    <div class="transaction-body">
+                                        {% if block.is_genesis and transaction.message %}
+                                            <div class="alert alert-info mb-0">
+                                                <i class="fas fa-info-circle mr-2"></i>
+                                                {{ transaction.message }} - начало цепочки блоков
+                                            </div>
+                                        {% else %}
+                                            <div class="transaction-details">
+                                                <div class="detail-item">
+                                                    <div class="detail-label">Склад-отправитель</div>
+                                                    <div class="detail-value">
+                                                        {{ transaction.sender_name }} (ID: {{ transaction.СкладОтправительID }})
+                                                    </div>
+                                                </div>
+                                                <div class="detail-item">
+                                                    <div class="detail-label">Склад-получатель</div>
+                                                    <div class="detail-value">
+                                                        {{ transaction.receiver_name }} (ID: {{ transaction.СкладПолучательID }})
+                                                    </div>
+                                                </div>
+                                                <div class="detail-item">
+                                                    <div class="detail-label">Документ</div>
+                                                    <div class="detail-value">
+                                                        {{ transaction.document_name }} (ID: {{ transaction.ДокументID }})
+                                                    </div>
+                                                </div>
+                                                <div class="detail-item">
+                                                    <div class="detail-label">Товар</div>
+                                                    <div class="detail-value">
+                                                        {{ transaction.product_name }} (ID: {{ transaction.ТоварID }})
+                                                    </div>
+                                                </div>
+                                                <div class="detail-item">
+                                                    <div class="detail-label">Количество</div>
+                                                    <div class="detail-value">
+                                                        {{ transaction.Количество }} {{ transaction.unit_name }}
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <button class="btn btn-sm btn-outline-info mt-3" type="button" data-toggle="collapse" data-target="#transactionData{{ block.index }}_{{ loop.index }}">
+                                                <i class="fas fa-code mr-1"></i>Показать JSON данные
+                                            </button>
+                                            <div class="collapse mt-2" id="transactionData{{ block.index }}_{{ loop.index }}">
+                                                <div class="code-json">{{ transaction | tojson(indent=2) }}</div>
+                                            </div>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        {% else %}
+                            <div class="alert alert-light mb-0">
+                                <i class="fas fa-info-circle mr-2"></i>
+                                Нет транзакций в этом блоке
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+            {% endfor %}
+        {% else %}
+            <div class="alert alert-info">
+                <i class="fas fa-info-circle mr-2"></i>
+                Блокчейн пуст. Добавьте транзакции, чтобы создать блоки.
+            </div>
+        {% endif %}
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.3/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    <script>
+        // Показать полный хэш при клике
+        document.querySelectorAll('.hash-display').forEach(el => {
+            el.addEventListener('click', function() {
+                const fullHash = this.nextElementSibling;
+                if (fullHash.style.display === 'block') {
+                    fullHash.style.display = 'none';
+                } else {
+                    fullHash.style.display = 'block';
+                }
+            });
+        });
+
+        // Копирование в буфер обмена
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(function() {
+                alert('Скопировано в буфер обмена!');
+            }, function(err) {
+                console.error('Ошибка копирования: ', err);
+            });
+        }
+    </script>
+</body>
+</html>

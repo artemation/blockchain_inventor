@@ -1,0 +1,1368 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Учет прихода и расхода</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+    <style>
+        :root {
+            --primary-color: #4361ee;
+            --secondary-color: #3f37c9;
+            --accent-color: #4895ef;
+            --dark-color: #2b2d42;
+            --light-color: #f8f9fa;
+            --success-color: #4cc9f0;
+            --danger-color: #f72585;
+            --warning-color: #f8961e;
+            --sidebar-width: 280px;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #f5f7fa;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            min-height: 100vh;
+            color: #000000;
+            line-height: 1.6;
+        }
+
+        /* Стили для боковой панели */
+        .sidebar {
+            width: var(--sidebar-width);
+            background: linear-gradient(312deg, var(--dark-color), #2a2ab1);
+            padding: 20px 15px;
+            position: fixed;
+            height: 100%;
+            overflow-y: auto;
+            box-shadow: 2px 0 15px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s;
+            z-index: 1000;
+        }
+
+        .sidebar .logo-container {
+            text-align: center;
+            padding: 15px 0;
+            margin-bottom: 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .sidebar .logo {
+            width: 80%;
+            max-width: 180px;
+            height: auto;
+
+        }
+
+        .sidebar .logo:hover {
+            transform: scale(1.05);
+            /* Меняем свечение на более подходящее для квадратного лого */
+            box-shadow: 0 0 10px rgba(67, 97, 238, 0.7);
+        }
+
+        .sidebar .nav-link {
+            color: rgba(255, 255, 255, 0.8);
+            font-weight: 500;
+            margin-bottom: 8px;
+            padding: 12px 15px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            transition: all 0.3s;
+        }
+
+        .sidebar .nav-link i {
+            margin-right: 10px;
+            font-size: 1.1rem;
+            width: 24px;
+            text-align: center;
+        }
+
+        .sidebar .nav-link:hover {
+            color: white;
+            background: rgba(255, 255, 255, 0.1);
+            transform: translateX(5px);
+        }
+
+        .sidebar .nav-link.active {
+            background: var(--primary-color);
+            color: white;
+            box-shadow: 0 4px 12px rgba(67, 97, 238, 0.3);
+        }
+
+        /* Основной контент */
+        .main-content {
+            margin-left: var(--sidebar-width);
+            padding: 30px;
+            width: calc(100% - var(--sidebar-width));
+            transition: all 0.3s;
+        }
+
+        .page-header {
+            background: white;
+            padding: 25px 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .page-title {
+            color: var(--dark-color);
+            font-weight: 700;
+            margin: 0;
+            font-size: 1.8rem;
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+        }
+
+        .user-info .badge {
+            background: var(--accent-color);
+            padding: 8px 12px;
+            border-radius: 20px;
+            font-weight: 500;
+            font-size: 0.85rem;
+        }
+
+        .card {
+            border: none;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            margin-bottom: 30px;
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+        }
+
+        .card-header {
+            background: white;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+            padding: 18px 25px;
+            border-radius: 10px 10px 0 0 !important;
+            font-weight: 600;
+            color: var(--dark-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .card-body {
+            padding: 25px;
+        }
+
+        /* Улучшенные стили формы */
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            font-weight: 600;
+            color: #555;
+            margin-bottom: 8px;
+            display: block;
+        }
+
+        .form-control {
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 12px 15px;
+            transition: all 0.3s;
+            box-shadow: none;
+            font-size: 15px;
+            line-height: 1.5;
+            height: auto;
+            min-height: 46px;
+        }
+
+        .form-control:focus {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 0.2rem rgba(67, 97, 238, 0.15);
+        }
+
+        /* Стили для выпадающих списков */
+        select.form-control {
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            background-size: 16px;
+            padding-right: 35px;
+        }
+
+        select.form-control option {
+            padding: 12px 15px;
+            line-height: 1.6;
+            font-size: 15px;
+            margin: 2px 0;
+        }
+
+        /* Стили для Select2 */
+        .select2-container .select2-selection--single {
+            height: auto !important;
+            min-height: 46px;
+            border: 1px solid #e0e0e0 !important;
+            border-radius: 8px !important;
+        }
+
+        /* Стили для плейсхолдера Select2 */
+        .select2-container--default .select2-selection--single .select2-selection__placeholder {
+            color: #6c757d;
+            line-height: 36px;
+        }
+
+        /* Выравнивание текста в Select2 */
+        .select2-container--default .select2-selection--single .select2-selection__rendered {
+            line-height: 36px;
+            padding-left: 15px;
+        }
+
+        /* Скрываем стандартную стрелку Select2 */
+        .select2-container--default .select2-selection--single .select2-selection__arrow b {
+            display: none !important;
+        }
+
+        /* Добавляем кастомную стрелку */
+        .select2-container--default .select2-selection--single:after {
+            content: '\f078';
+            font-family: 'Font Awesome 5 Free';
+            font-weight: 900;
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            pointer-events: none;
+            color: #6c757d;
+        }
+
+        .select2-container--default .select2-selection--single .select2-selection__rendered {
+            line-height: 1.5 !important;
+            padding: 12px 15px !important;
+            font-size: 15px;
+        }
+
+        .select2-container--default .select2-selection--single .select2-selection__arrow {
+            height: 44px !important;
+            right: 10px !important;
+        }
+
+        .select2-dropdown {
+            border: 1px solid #e0e0e0 !important;
+            border-radius: 8px !important;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1) !important;
+        }
+
+        .select2-results__option {
+            padding: 12px 15px !important;
+            line-height: 1.5 !important;
+            font-size: 15px;
+        }
+
+        .select2-results__option--highlighted {
+            background-color: var(--accent-color) !important;
+        }
+
+        /* Улучшенные стили для таблицы */
+        .table-container {
+            overflow-x: auto;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+            background: white;
+        }
+
+        .table {
+            table-layout: fixed;
+            width: 100%;
+            background-color: #fff;
+            border: none;
+            border-radius: 10px;
+            margin-bottom: 0;
+        }
+
+        .table th {
+            background-color: #f9fafc;
+            color: #555;
+            font-weight: 600;
+            padding: 15px;
+            border-bottom: 2px solid #f0f0f0;
+            position: sticky;
+            top: 0;
+        }
+
+        .table td {
+            padding: 14px 15px;
+            border-bottom: 1px solid #f0f0f0;
+            vertical-align: middle;
+            line-height: 1.5;
+            word-break: break-word;
+            overflow-wrap: anywhere;
+        }
+
+        .table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .table tr:hover td {
+            background-color: #f8fafd;
+        }
+
+        .signature-column {
+            width: 200px;
+            font-family: monospace;
+            font-size: 0.85rem;
+            color: #666;
+        }
+
+        /* Кнопки */
+        .btn {
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-weight: 600;
+            transition: all 0.3s;
+            border: none;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+        }
+
+        .btn-primary:hover {
+            background-color: var(--secondary-color);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(67, 97, 238, 0.3);
+        }
+
+        .btn-warning {
+            background-color: var(--warning-color);
+        }
+
+        .btn-warning:hover {
+            background-color: #e07e0d;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(248, 150, 30, 0.3);
+        }
+
+        .btn-sm {
+            padding: 8px 14px;
+            font-size: 0.85rem;
+        }
+
+        /* Модальное окно */
+        .modal-content {
+            border: none;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+        }
+
+        .modal-header {
+            background: linear-gradient(to right, var(--primary-color), var(--secondary-color));
+            color: white;
+            padding: 15px 20px;
+            border-bottom: none;
+        }
+
+        .modal-title {
+            font-weight: 700;
+        }
+
+        .modal-body {
+            padding: 25px;
+            font-size: 16px;
+            line-height: 1.6;
+        }
+
+        .modal-footer {
+            border-top: none;
+            padding: 15px 20px;
+            background: #f9fafc;
+        }
+
+        /* Лоадер */
+        .loader {
+            border: 4px solid rgba(67, 97, 238, 0.1);
+            border-top: 4px solid var(--primary-color);
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+            display: none;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Анимации */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .fade-in {
+            animation: fadeIn 0.5s ease-out forwards;
+        }
+
+        /* Бейджи статусов */
+        .status-badge {
+            padding: 6px 12px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-success {
+            background-color: rgba(76, 201, 240, 0.1);
+            color: var(--success-color);
+        }
+
+        .status-warning {
+            background-color: rgba(248, 150, 30, 0.1);
+            color: var(--warning-color);
+        }
+
+        .status-danger {
+            background-color: rgba(247, 37, 133, 0.1);
+            color: var(--danger-color);
+        }
+
+        /* Адаптивность */
+        @media (max-width: 992px) {
+            .sidebar {
+                width: 80px;
+                overflow: hidden;
+            }
+
+            .sidebar .logo-container {
+                padding: 15px 5px;
+            }
+
+            .sidebar .logo {
+                width: 50px;
+            }
+
+            .sidebar .nav-link span {
+                display: none;
+            }
+
+            .sidebar .nav-link i {
+                margin-right: 0;
+                font-size: 1.3rem;
+            }
+
+            .main-content {
+                margin-left: 80px;
+                width: calc(100% - 80px);
+            }
+        }
+
+        @media (max-width: 768px) {
+            .page-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .user-info {
+                margin-top: 15px;
+            }
+
+            .card-body {
+                padding: 20px;
+            }
+
+            /* Увеличенные размеры для мобильных */
+            .form-control, select.form-control option {
+                font-size: 16px;
+                padding: 14px 15px;
+            }
+
+            .select2-container .select2-selection--single {
+                min-height: 52px;
+            }
+        }
+
+        /* Кастомный скроллбар */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 10px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--accent-color);
+            border-radius: 10px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--primary-color);
+        }
+    </style>
+</head>
+<body>
+    <!-- Боковая панель -->
+    <div class="sidebar">
+        <div class="logo-container">
+            <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Логотип" class="logo">
+        </div>
+        <nav class="navbar navbar-expand-lg navbar-dark">
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav flex-column">
+                    <li class="nav-item">
+                        <a class="nav-link active" href="{{ url_for('index') }}">
+                            <i class="fas fa-home"></i>
+                            <span>Главная</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('view_blockchain') }}">
+                            <i class="fas fa-link"></i>
+                            <span>Блокчейн</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('admin_panel') }}">
+                            <i class="fas fa-cog"></i>
+                            <span>Администрирование</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('test_transaction') }}">
+                            <i class="fas fa-vial"></i>
+                            <span>Тест транзакции</span>
+                        </a>
+                    </li>
+                </ul>
+            </div>
+        </nav>
+    </div>
+
+    <!-- Основной контент -->
+    <div class="main-content">
+        <div class="page-header fade-in">
+            <h1 class="page-title">Учет прихода и расхода</h1>
+            <div class="user-info">
+                {% if current_user.is_authenticated %}
+                    <span class="badge">
+                        <i class="fas fa-user-circle mr-2"></i>
+                        {{ current_user.username }}
+                    </span>
+                    <a href="{{ url_for('logout') }}" class="btn btn-sm btn-outline-danger ml-3">
+                        <i class="fas fa-sign-out-alt"></i>
+                    </a>
+                {% else %}
+                    <a href="{{ url_for('login') }}" class="btn btn-sm btn-primary mr-2">
+                        <i class="fas fa-sign-in-alt mr-1"></i> Войти
+                    </a>
+                    <a href="{{ url_for('register') }}" class="btn btn-sm btn-outline-primary">
+                        <i class="fas fa-user-plus mr-1"></i> Регистрация
+                    </a>
+                {% endif %}
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        <i class="fas fa-{% if category == 'success' %}check-circle{% elif category == 'danger' %}exclamation-circle{% else %}info-circle{% endif %} mr-2"></i>
+                        {{ message }}
+                        <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                            <span aria-hidden="true">&times;</span>
+                        </button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        {% if connection_status %}
+            <div class="alert alert-info alert-dismissible fade show" role="alert">
+                <i class="fas fa-plug mr-2"></i>
+                {{ connection_status }}
+                <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+        {% endif %}
+
+        <div class="row">
+            <div class="col-lg-6">
+                <div class="card fade-in">
+                    <div class="card-header">
+                        <span><i class="fas fa-plus-circle mr-2"></i>Добавить запись</span>
+                    </div>
+                    <div class="card-body">
+                        <form id="transactionForm" method="POST" class="needs-validation" novalidate>
+                            {{ form.hidden_tag() }}
+                            <div class="form-group">
+                                {{ form.СкладОтправительID.label(class="form-label") }}
+                                {{ form.СкладОтправительID(class="form-control select2-field", **{'data-placeholder': 'Выберите склад отправитель'}) }}
+                            </div>
+                            <div class="form-group">
+                                {{ form.СкладПолучательID.label(class="form-label") }}
+                                {{ form.СкладПолучательID(class="form-control select2-field", **{'data-placeholder': 'Выберите склад получатель'}) }}
+                            </div>
+                            <div class="form-group">
+                                {{ form.ДокументID.label(class="form-label") }}
+                                {{ form.ДокументID(class="form-control select2-field", **{'data-placeholder': 'Выберите тип документа'}) }}
+                            </div>
+                            <div class="form-group">
+                                {{ form.ТоварID.label(class="form-label") }}
+                                {{ form.ТоварID(class="form-control select2-field", id="товар_id", **{'data-placeholder': 'Выберите товар'}) }}
+                            </div>
+                            <div class="form-group">
+                                {{ form.Количество.label(class="form-label") }}
+                                <div class="input-group">
+                                    {{ form.Количество(class="form-control") }}
+                                    <div class="input-group-append">
+                                        <span class="input-group-text" id="unit_name_display">-</span>
+                                    </div>
+                                </div>
+                            </div>
+                            {{ form.Единица_ИзмеренияID(class="form-control", id="единица_измерения_id", type="hidden") }}
+                            <button type="submit" class="btn btn-primary btn-block mt-4">
+                                <i class="fas fa-save mr-2"></i>Добавить запись
+                            </button>
+                            <div class="loader"></div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-6">
+                <div class="card fade-in">
+                    <div class="card-header">
+                        <span><i class="fas fa-info-circle mr-2"></i>Информация о товаре</span>
+                    </div>
+                    <div class="card-body">
+                        <div id="item-info">
+                            <div class="text-center text-muted py-4">
+                                <i class="fas fa-box-open fa-3x mb-3"></i>
+                                <p>Выберите товар для просмотра информации</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card fade-in mt-4">
+            <div class="card-header">
+                <span><i class="fas fa-history mr-2"></i>История операций</span>
+                <div class="badge badge-primary">
+                    Всего: {{ records|length }}
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-container">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Отправитель</th>
+                                <th>Получатель</th>
+                                <th>Документ</th>
+                                <th>Товар</th>
+                                <th>Кол-во</th>
+                                <th>Ед. изм.</th>
+                                <th>Хеш транзакции</th>
+                                <th>Действия</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% if records %}
+                                {% for record in records %}
+                                    <tr>
+                                        <td><span class="badge badge-light">#{{ record.ПриходРасходID }}</span></td>
+                                        <td>{{ record.СкладОтправитель.Название }}</td>
+                                        <td>{{ record.СкладПолучатель.Название }}</td>
+                                        <td>
+                                            <span class="status-badge {% if 'приход' in record.Тип_документа.Тип_документа.lower() %}status-success{% else %}status-warning{% endif %}">
+                                                {{ record.Тип_документа.Тип_документа }}
+                                            </span>
+                                        </td>
+                                        <td>{{ record.Товары.Наименование }}</td>
+                                        <td>{{ record.Количество }}</td>
+                                        <td>{{ record.Единица_измерения.Единица_Измерения }}</td>
+                                        <td class="signature-column">
+                                            {% if record.TransactionHash %}
+                                                <span class="text-truncate d-inline-block" style="max-width: 150px;" title="{{ record.TransactionHash }}">
+                                                    {{ record.TransactionHash }}
+                                                </span>
+                                            {% else %}
+                                                <span class="text-muted">Не подтверждено</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="checkIntegrity({{ record.ПриходРасходID }})" title="Проверить целостность">
+                                                <i class="fas fa-shield-alt"></i>
+                                            </button>
+                                            <button type="button" class="btn btn-sm btn-outline-info ml-1" onclick="showRecordDetails({{ record.ПриходРасходID }})" title="Подробнее">
+                                                <i class="fas fa-eye"></i>
+                                            </button>
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            {% else %}
+                                <tr>
+                                    <td colspan="9" class="text-center py-4 text-muted">
+                                        <i class="fas fa-database fa-2x mb-3"></i>
+                                        <p>Нет записей для отображения</p>
+                                    </td>
+                                </tr>
+                            {% endif %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Модальное окно для отображения результатов -->
+        <div class="modal fade" id="integrityModal" tabindex="-1" role="dialog" aria-labelledby="integrityModalLabel" aria-hidden="true">
+            <div class="modal-dialog" role="document">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="integrityModalLabel">
+                            <i class="fas fa-shield-alt mr-2"></i>Проверка целостности данных
+                        </h5>
+                        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                            <span aria-hidden="true">&times;</span>
+                        </button>
+                    </div>
+                    <div class="modal-body">
+                        <div id="integrityResult">
+                            <div class="text-center py-3">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="sr-only">Загрузка...</span>
+                                </div>
+                                <p class="mt-3">Проверка целостности данных...</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-dismiss="modal">
+                            <i class="fas fa-times mr-1"></i> Закрыть
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Модальное окно для деталей записи -->
+        <div class="modal fade" id="detailsModal" tabindex="-1" role="dialog" aria-labelledby="detailsModalLabel" aria-hidden="true">
+            <div class="modal-dialog" role="document">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="detailsModalLabel">
+                            <i class="fas fa-info-circle mr-2"></i>Детали записи
+                        </h5>
+                        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                            <span aria-hidden="true">&times;</span>
+                        </button>
+                    </div>
+                    <div class="modal-body">
+                        <div id="detailsContent">
+                            <div class="text-center py-3">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="sr-only">Загрузка...</span>
+                                </div>
+                                <p class="mt-3">Загрузка деталей записи...</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-dismiss="modal">
+                            <i class="fas fa-times mr-1"></i> Закрыть
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.9.3/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/i18n/ru.js"></script>
+
+    <script>
+    // Глобальные функции
+    function showRecordDetails(recordId) {
+        $('#detailsModal').modal('show');
+        $('#detailsContent').html(`
+            <div class="text-center py-3">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="sr-only">Загрузка...</span>
+                </div>
+                <p class="mt-3">Загрузка деталей записи...</p>
+            </div>
+        `);
+
+        $.ajax({
+            url: '/get_record_details/' + recordId,
+            type: 'GET',
+            success: function(response) {
+                if (response.success) {
+                    $('#detailsModalLabel').html(`<i class="fas fa-info-circle mr-2"></i>Детали записи #${recordId}`);
+                    $('#detailsContent').html(`
+                        <div class="record-details">
+                            <div class="row mb-3">
+                                <div class="col-md-6">
+                                    <h6 class="font-weight-bold">Склад отправитель:</h6>
+                                    <p>${response.data.sender_warehouse || 'Не указано'}</p>
+                                </div>
+                                <div class="col-md-6">
+                                    <h6 class="font-weight-bold">Склад получатель:</h6>
+                                    <p>${response.data.receiver_warehouse || 'Не указано'}</p>
+                                </div>
+                            </div>
+                            <div class="row mb-3">
+                                <div class="col-md-6">
+                                    <h6 class="font-weight-bold">Тип документа:</h6>
+                                    <p>${response.data.document_type || 'Не указано'}</p>
+                                </div>
+                                <div class="col-md-6">
+                                    <h6 class="font-weight-bold">Товар:</h6>
+                                    <p>${response.data.item_name || 'Не указано'}</p>
+                                </div>
+                            </div>
+                            <div class="row mb-3">
+                                <div class="col-md-6">
+                                    <h6 class="font-weight-bold">Количество:</h6>
+                                    <p>${response.data.quantity || '0'} ${response.data.unit || ''}</p>
+                                </div>
+                                <div class="col-md-6">
+                                    <h6 class="font-weight-bold">Дата операции:</h6>
+                                    <p>${response.data.operation_date || 'Не указана'}</p>
+                                </div>
+                            </div>
+                            ${response.data.transaction_hash ? `
+                            <div class="bg-light p-3 rounded mt-3">
+                                <h6 class="font-weight-bold">Хеш транзакции:</h6>
+                                <code>${response.data.transaction_hash}</code>
+                            </div>
+                            ` : ''}
+                        </div>
+                    `);
+                } else {
+                    $('#detailsContent').html(`
+                        <div class="text-center text-danger">
+                            <i class="fas fa-exclamation-circle fa-3x mb-3"></i>
+                            <h5 class="font-weight-bold">Ошибка при загрузке данных</h5>
+                            <p>${response.message || 'Не удалось загрузить детали записи'}</p>
+                        </div>
+                    `);
+                }
+            },
+            error: function() {
+                $('#detailsContent').html(`
+                    <div class="text-center text-danger">
+                        <i class="fas fa-exclamation-circle fa-3x mb-3"></i>
+                        <h5 class="font-weight-bold">Ошибка</h5>
+                        <p>Произошла ошибка при загрузке данных</p>
+                    </div>
+                `);
+            }
+        });
+    }
+
+    function checkIntegrity(recordId) {
+        $('#integrityModal').modal('show');
+        $('#integrityResult').html(`
+            <div class="text-center py-3">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="sr-only">Загрузка...</span>
+                </div>
+                <p class="mt-3">Проверка целостности данных...</p>
+            </div>
+        `);
+
+        $.ajax({
+            url: '/check_integrity/' + recordId,
+            type: 'POST',
+            contentType: 'application/json',
+            headers: {
+                'X-CSRFToken': '{{ csrf_token() }}'
+            },
+            data: JSON.stringify({
+                transaction_data: null
+            }),
+            success: function(response) {
+                // Добавим логирование для отладки
+                console.log("Response from server:", response);
+
+                let resultHtml;
+
+                if (response.success === true) {
+                    resultHtml = `
+                        <div class="text-center">
+                            <i class="fas fa-check-circle fa-4x text-success mb-3"></i>
+                            <h5 class="font-weight-bold text-success mb-3">Запись верна</h5>
+                            <p>${response.message || 'Все данные соответствуют записям в блокчейне.'}</p>
+                    `;
+                } else {
+                    resultHtml = `
+                        <div class="text-center">
+                            <i class="fas fa-times-circle fa-4x text-danger mb-3"></i>
+                            <h5 class="font-weight-bold text-danger mb-3">Обнаружены проблемы</h5>
+                            <p>${response.message || 'Данные не соответствуют записям в блокчейне.'}</p>
+                    `;
+                }
+
+                // Добавляем дополнительную информацию, если она есть
+                if (response.details) {
+                    resultHtml += `<p class="text-muted small">${response.details}</p>`;
+                }
+
+                if (response.transaction_data) {
+                    resultHtml += `
+                        <div class="mt-3 text-left">
+                            <h6 class="font-weight-bold">Данные транзакции:</h6>
+                            <div class="bg-light p-3 rounded">
+                                <pre class="mb-0 small">${JSON.stringify(response.transaction_data, null, 2)}</pre>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                resultHtml += `</div>`;
+                $('#integrityResult').html(resultHtml);
+            },
+            error: function(xhr) {
+                let errorMessage = 'Произошла ошибка при проверке целостности';
+                if (xhr.responseJSON && xhr.responseJSON.message) {
+                    errorMessage = xhr.responseJSON.message;
+                } else if (xhr.statusText) {
+                    errorMessage += `: ${xhr.statusText}`;
+                }
+
+                $('#integrityResult').html(`
+                    <div class="text-center text-danger">
+                        <i class="fas fa-exclamation-triangle fa-4x mb-3"></i>
+                        <h5 class="font-weight-bold">Ошибка</h5>
+                        <p>${errorMessage}</p>
+                        ${xhr.status ? `<small class="text-muted">Код ошибки: ${xhr.status}</small>` : ''}
+                    </div>
+                `);
+            }
+        });
+    }
+
+    // Форматирование option для Select2
+    function formatSelectOption(option) {
+        if (!option.id) return option.text;
+
+        var $option = $(
+            '<div class="select2-option-wrapper">' +
+            '<span class="select2-option-text">' + option.text + '</span>' +
+            '</div>'
+        );
+
+        return $option;
+    }
+
+    // Инициализация Select2
+    function initSelect2() {
+        $('.select2-field').select2({
+            width: '100%',
+            dropdownAutoWidth: true,
+            dropdownParent: $('.main-content'),
+            language: 'ru',
+            minimumResultsForSearch: 5,
+            placeholder: function() {
+                return $(this).data('placeholder');
+            },
+            allowClear: true,
+            templateResult: formatSelectOption,
+            templateSelection: formatSelectOption
+        }).val(null).trigger('change');
+    }
+
+    $(document).ready(function() {
+        // Инициализация при загрузке
+        initSelect2();
+
+        // Переменная для хранения информации о доступном количестве
+        let availableQuantity = 0;
+        let isExpenseOperation = false;
+        let currentItemId = null;
+
+        // Определяем, является ли тип документа расходом
+        $('#ДокументID').change(function() {
+            let docText = $(this).find('option:selected').text().toLowerCase();
+            isExpenseOperation = docText.includes('расход');
+            checkQuantityValidity();
+            updateFormUI();
+        });
+
+        // При загрузке страницы проверяем тип документа
+        let docText = $('#ДокументID option:selected').text().toLowerCase();
+        isExpenseOperation = docText.includes('расход');
+        updateFormUI();
+
+        // Функция для обновления UI формы в зависимости от типа операции
+        function updateFormUI() {
+            if (isExpenseOperation) {
+                $('.card-header:first i').removeClass('fa-plus-circle').addClass('fa-minus-circle');
+                $('button[type="submit"] i').removeClass('fa-save').addClass('fa-paper-plane');
+            } else {
+                $('.card-header:first i').removeClass('fa-minus-circle').addClass('fa-plus-circle');
+                $('button[type="submit"] i').removeClass('fa-paper-plane').addClass('fa-save');
+            }
+        }
+
+        // Обработка изменения склада отправителя
+        $('#СкладОтправительID').change(function() {
+            checkAvailableQuantity();
+        });
+
+        // Функция для проверки доступного количества
+        function checkAvailableQuantity() {
+            let itemId = $('#товар_id').val();
+            let warehouseId = $('#СкладОтправительID').val();
+
+            if (itemId && warehouseId) {
+                $.ajax({
+                    url: '/check_inventory',
+                    type: 'GET',
+                    data: {
+                        warehouse_id: warehouseId,
+                        item_id: itemId
+                    },
+                    success: function(response) {
+                        if (response.available !== undefined) {
+                            availableQuantity = parseFloat(response.available);
+                            $('#available-quantity').text(availableQuantity);
+                            if (response.last_update) {
+                                $('#last-update').text('Обновлено: ' + new Date(response.last_update).toLocaleString());
+                            }
+                            checkQuantityValidity();
+                        } else {
+                            showError('#available-quantity', 'Нет данных');
+                        }
+                    },
+                    error: function(xhr, status, error) {
+                        console.error('Ошибка при проверке запасов:', error);
+                        $('#available-quantity').text('-');
+                    }
+                });
+            }
+        }
+
+        // Функция для обновления информации о товаре
+        function updateItemInfo(data) {
+            let html = `
+                <div class="row">
+                    <div class="col-md-6">
+                        <h5 class="font-weight-bold mb-3">${data.item_name}</h5>
+                        <div class="mb-2">
+                            <span class="text-muted">Код товара:</span>
+                            <span class="float-right font-weight-bold">${data.item_id}</span>
+                        </div>
+                        <div class="mb-2">
+                            <span class="text-muted">Категория:</span>
+                            <span class="float-right font-weight-bold">${data.description || 'Не указана'}</span>
+                        </div>
+                        <div class="mb-2">
+                            <span class="text-muted">Ед. измерения:</span>
+                            <span class="float-right font-weight-bold">${data.unit}</span>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card bg-light">
+                            <div class="card-body text-center">
+                                <h6 class="card-title text-muted">Доступно на складе</h6>
+                                <h3 class="font-weight-bold text-primary">
+                                    <span id="available-quantity">-</span> ${data.unit}
+                                </h3>
+                                <small class="text-muted" id="last-update">Обновление: -</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            $('#item-info').html(html);
+        }
+
+        // Функция для отображения загрузки
+        function showLoader(selector) {
+            $(selector).html(`
+                <div class="text-center py-4">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="sr-only">Загрузка...</span>
+                    </div>
+                    <p class="mt-2">Загрузка данных...</p>
+                </div>
+            `);
+        }
+
+        // Функция для отображения ошибки
+        function showError(selector, message) {
+            $(selector).html(`
+                <div class="text-center text-danger py-4">
+                    <i class="fas fa-exclamation-triangle fa-2x mb-3"></i>
+                    <p>${message}</p>
+                </div>
+            `);
+        }
+
+        // Обработка изменения товара
+        $('#товар_id').change(function() {
+            var item_id = $(this).val();
+            currentItemId = item_id;
+
+            if (item_id) {
+                showLoader('#item-info');
+
+                // Получаем информацию о товаре
+                $.ajax({
+                    url: '/get_item_info/' + item_id,
+                    type: 'GET',
+                    success: function(response) {
+                        if (response.success) {
+                            updateItemInfo(response);
+                            // Получаем единицу измерения
+                            $('#единица_измерения_id').val(response.unit_id);
+                            $('#unit_name_display').text(response.unit);
+
+                            // Проверка доступного количества на складе
+                            checkAvailableQuantity();
+                        } else {
+                            showError('#item-info', response.message || 'Ошибка загрузки данных');
+                        }
+                    },
+                    error: function(error) {
+                        console.error('Ошибка при получении информации о товаре:', error);
+                        showError('#item-info', 'Ошибка загрузки данных');
+                    }
+                });
+            } else {
+                $('#единица_измерения_id').val('');
+                $('#unit_name_display').text('-');
+                $('#item-info').html(`
+                    <div class="text-center text-muted py-4">
+                        <i class="fas fa-box-open fa-3x mb-3"></i>
+                        <p>Выберите товар для просмотра информации</p>
+                    </div>
+                `);
+            }
+        });
+
+        // Проверка количества при вводе
+        $('#Количество').on('input', function() {
+            checkQuantityValidity();
+        });
+
+        // Функция для проверки валидности количества
+        function checkQuantityValidity() {
+            let quantity = parseFloat($('#Количество').val()) || 0;
+            let submitBtn = $('button[type="submit"]');
+            let quantityField = $('#Количество');
+
+            // Если это операция расхода и количество превышает доступное
+            if (isExpenseOperation && !isNaN(quantity) && !isNaN(availableQuantity) && quantity > availableQuantity) {
+                quantityField.removeClass('is-valid').addClass('is-invalid');
+                submitBtn.prop('disabled', true).addClass('btn-danger').removeClass('btn-primary');
+
+                if ($('#quantity-error').length === 0) {
+                    quantityField.after(`
+                        <div id="quantity-error" class="invalid-feedback d-block">
+                            <i class="fas fa-exclamation-circle mr-1"></i>
+                            Недостаточно товара на складе. Доступно: ${availableQuantity}
+                        </div>
+                    `);
+                }
+                return false;
+            } else {
+                quantityField.removeClass('is-invalid');
+                $('#quantity-error').remove();
+
+                if (quantity > 0) {
+                    quantityField.addClass('is-valid');
+                    submitBtn.prop('disabled', false).removeClass('btn-danger').addClass('btn-primary');
+                } else {
+                    quantityField.removeClass('is-valid');
+                }
+                return true;
+            }
+        }
+
+        // Обработка отправки формы
+        $('#transactionForm').submit(function(event) {
+            event.preventDefault();
+
+            // Проверяем валидность количества перед отправкой
+            if (!checkQuantityValidity()) {
+                showAlert('Недостаточно товара на складе для выполнения операции', 'danger');
+                return false;
+            }
+
+            $('.loader').show();
+            $('button[type="submit"]').prop('disabled', true).html('<i class="fas fa-spinner fa-spin mr-2"></i> Обработка...');
+
+            // Отправляем форму через AJAX
+            $.ajax({
+                url: window.location.pathname,
+                type: 'POST',
+                data: $(this).serialize(),
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                complete: function() {
+                    $('.loader').hide();
+                    $('button[type="submit"]').prop('disabled', false).html('<i class="fas fa-save mr-2"></i> Добавить запись');
+                },
+                success: function(response) {
+                    if (response && response.success) {
+                        showAlert('Запись успешно добавлена', 'success');
+                        getLastRecord();
+                        $('#transactionForm')[0].reset();
+                        $('#единица_измерения_id').val('');
+                        $('#unit_name_display').text('-');
+
+                        // Сбрасываем Select2
+                        $('.select2-field').val(null).trigger('change');
+
+                        // Сбрасываем информацию о товаре
+                        $('#item-info').html(`
+                            <div class="text-center text-muted py-4">
+                                <i class="fas fa-box-open fa-3x mb-3"></i>
+                                <p>Выберите товар для просмотра информации</p>
+                            </div>
+                        `);
+                    } else {
+                        let errorMsg = response && response.message ? response.message : 'Ошибка при добавлении записи';
+                        showAlert(errorMsg, 'danger');
+                    }
+                },
+                error: function(xhr) {
+                    try {
+                        let errorResponse = JSON.parse(xhr.responseText);
+                        showAlert(errorResponse.message || 'Произошла ошибка', 'danger');
+                    } catch (e) {
+                        showAlert('Произошла ошибка при обработке запроса', 'danger');
+                    }
+                }
+            });
+        });
+
+        // Функция для получения последней записи
+        function getLastRecord() {
+            $.ajax({
+                url: '/get_last_record',
+                type: 'GET',
+                success: function(response) {
+                    if (response.success && response.record) {
+                        addNewRowToTable(response.record);
+                    }
+                },
+                error: function(error) {
+                    console.error('Ошибка при получении последней записи:', error);
+                }
+            });
+        }
+
+        // Функция для добавления новой строки в таблицу
+        function addNewRowToTable(record) {
+            var newRow = `
+                <tr class="new-record-highlight">
+                    <td><span class="badge badge-light">#${record.ПриходРасходID}</span></td>
+                    <td>${record.СкладОтправитель}</td>
+                    <td>${record.СкладПолучатель}</td>
+                    <td>
+                        <span class="status-badge ${record.Тип_документа.toLowerCase().includes('приход') ? 'status-success' : 'status-warning'}">
+                            ${record.Тип_документа}
+                        </span>
+                    </td>
+                    <td>${record.Товары}</td>
+                    <td>${record.Количество}</td>
+                    <td>${record.Единица_измерения}</td>
+                    <td class="signature-column">
+                        ${record.TransactionHash ?
+                            `<span class="text-truncate d-inline-block" style="max-width: 150px;" title="${record.TransactionHash}">
+                                ${record.TransactionHash}
+                            </span>` :
+                            '<span class="text-muted">Не подтверждено</span>'}
+                    </td>
+                    <td>
+                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="checkIntegrity(${record.ПриходРасходID})" title="Проверить целостность">
+                            <i class="fas fa-shield-alt"></i>
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-info ml-1" onclick="showRecordDetails(${record.ПриходРасходID})" title="Подробнее">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    </td>
+                </tr>
+            `;
+
+            if ($('.table tbody tr').length && $('.table tbody tr td[colspan]').length) {
+                $('.table tbody').html(newRow);
+            } else {
+                $('.table tbody').prepend(newRow);
+            }
+
+            // Анимация подсветки новой строки
+            $('.new-record-highlight').css({
+                'background-color': 'rgba(76, 201, 240, 0.2)',
+                'transition': 'background-color 2s ease-out'
+            });
+
+            setTimeout(function() {
+                $('.new-record-highlight').css('background-color', '');
+                $('.new-record-highlight').removeClass('new-record-highlight');
+            }, 3000);
+        }
+
+        // Функция для отображения оповещений
+        function showAlert(message, type) {
+            var icon = '';
+            switch(type) {
+                case 'success': icon = 'check-circle'; break;
+                case 'danger': icon = 'exclamation-circle'; break;
+                case 'warning': icon = 'exclamation-triangle'; break;
+                default: icon = 'info-circle';
+            }
+
+            var alert = $(`
+                <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+                    <i class="fas fa-${icon} mr-2"></i>
+                    ${message}
+                    <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+            `);
+
+            $('.alert-' + type).remove();
+            alert.insertAfter('.page-header');
+
+            setTimeout(function() {
+                alert.alert('close');
+            }, 5000);
+        }
+    });
+    </script>
+</body>
+</html>

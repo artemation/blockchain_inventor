@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Учет прихода и расхода</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <style>
+        body {
+            padding-top: 20px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .alert {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Учет прихода и расхода</h1>
+        <p><a href="{{ url_for('view_blockchain') }}">Просмотреть блокчейн</a></p>
+        {% if current_user.is_authenticated %}
+            <p>Вы вошли как {{ current_user.username }} | <a href="{{ url_for('logout') }}">Выйти</a></p>
+        {% else %}
+            <p>Пожалуйста, <a href="{{ url_for('login') }}">войдите</a> или <a href="{{ url_for('register') }}">зарегистрируйтесь</a></p>
+        {% endif %}
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}" role="alert">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        {% if connection_status %}
+            <div class="alert alert-info" role="alert">
+                {{ connection_status }}
+            </div>
+        {% endif %}
+
+        <h2>Добавить запись</h2>
+        <form method="POST">
+            {{ form.hidden_tag() }}
+            <div class="form-group">
+                {{ form.СкладОтправительID.label }}
+                {{ form.СкладОтправительID(class="form-control") }}
+            </div>
+            <div class="form-group">
+                {{ form.СкладПолучательID.label }}
+                {{ form.СкладПолучательID(class="form-control") }}
+            </div>
+            <div class="form-group">
+                {{ form.ДокументID.label }}
+                {{ form.ДокументID(class="form-control") }}
+            </div>
+            <div class="form-group">
+                {{ form.ТоварID.label }}
+                {{ form.ТоварID(class="form-control") }}
+            </div>
+            <div class="form-group">
+                {{ form.Количество.label }}
+                {{ form.Количество(class="form-control") }}
+            </div>
+             <div class="form-group">
+                {{ form.Единица_ИзмеренияID.label }}
+                {{ form.Единица_ИзмеренияID(class="form-control") }}
+            </div>
+            {{ form.submit(class="btn btn-primary") }}
+        </form>
+
+        <h2>История операций</h2>
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Склад отправитель</th>
+                    <th>Склад получатель</th>
+                    <th>Тип документа</th>
+                    <th>Товар</th>
+                    <th>Количество</th>
+                    <th>Единица измерения</th>
+                    <th>Хэш транзакции</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for record in records %}
+                    <tr>
+                        <td>{{ record.ПриходРасходID }}</td>
+                        <td>{{ record.СкладОтправительID }}</td>
+                        <td>{{ record.СкладПолучательID }}</td>
+                        <td>{{ record.ДокументID }}</td>
+                        <td>{{ record.ТоварID }}</td>
+                        <td>{{ record.Количество }}</td>
+                        <td>{{ record.Единица_ИзмеренияID }}</td>
+                        <td>{{ record.TransactionHash }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.3/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+</body>
+</html>

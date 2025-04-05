@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Управление приглашениями</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        :root {
+            --primary-color: #4361ee;
+            --secondary-color: #3f37c9;
+            --accent-color: #4895ef;
+            --dark-color: #2b2d42;
+            --light-color: #f8f9fa;
+            --sidebar-width: 280px;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #f5f7fa;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            min-height: 100vh;
+            color: #333;
+            line-height: 1.6;
+        }
+
+        .sidebar {
+            width: var(--sidebar-width);
+            background: linear-gradient(312deg, var(--dark-color), #2a2ab1);
+            padding: 20px 15px;
+            position: fixed;
+            height: 100%;
+            overflow-y: auto;
+            box-shadow: 2px 0 15px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s;
+            z-index: 1000;
+        }
+
+        .sidebar .logo-container {
+            text-align: center;
+            padding: 15px 5px;
+            margin-bottom: 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .sidebar .logo {
+            width: 80%;
+            max-width: 180px;
+            height: auto;
+
+        }
+
+        .sidebar .nav-link {
+            color: rgba(255, 255, 255, 0.8);
+            font-weight: 500;
+            margin-bottom: 8px;
+            padding: 12px 15px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            transition: all 0.3s;
+        }
+
+        .sidebar .nav-link i {
+            margin-right: 10px;
+            font-size: 1.1rem;
+            width: 24px;
+            text-align: center;
+        }
+
+        .sidebar .nav-link:hover {
+            color: white;
+            background: rgba(255, 255, 255, 0.1);
+            transform: translateX(5px);
+        }
+
+        .sidebar .nav-link.active {
+            background: var(--primary-color);
+            color: white;
+            box-shadow: 0 4px 12px rgba(67, 97, 238, 0.3);
+        }
+
+        .main-content {
+            margin-left: var(--sidebar-width);
+            padding: 30px;
+            width: calc(100% - var(--sidebar-width));
+            transition: all 0.3s;
+        }
+
+        .page-header {
+            background: white;
+            padding: 25px 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .page-title {
+            color: var(--dark-color);
+            font-weight: 700;
+            margin: 0;
+            font-size: 1.8rem;
+        }
+
+        .card {
+            border: none;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            margin-bottom: 30px;
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+        }
+
+        .card-header {
+            background: white;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+            padding: 18px 25px;
+            border-radius: 10px 10px 0 0 !important;
+            font-weight: 600;
+            color: var(--dark-color);
+        }
+
+        .card-body {
+            padding: 25px;
+        }
+
+        .btn {
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-weight: 600;
+            transition: all 0.3s;
+            border: none;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+        }
+
+        .btn-primary:hover {
+            background-color: var(--secondary-color);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(67, 97, 238, 0.3);
+        }
+
+        .btn-secondary {
+            background-color: #6c757d;
+        }
+
+        .btn-secondary:hover {
+            background-color: #5a6268;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(108, 117, 125, 0.3);
+        }
+
+        .form-control {
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 12px 15px;
+            transition: all 0.3s;
+            box-shadow: none;
+        }
+
+        .form-control:focus {
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 0.2rem rgba(67, 97, 238, 0.15);
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            font-weight: 600;
+            color: #555;
+            margin-bottom: 8px;
+            display: block;
+        }
+
+        .table-container {
+            overflow-x: auto;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+            background: white;
+        }
+
+        .table {
+            table-layout: fixed;
+            width: 100%;
+            background-color: #fff;
+            border: none;
+            border-radius: 10px;
+            margin-bottom: 0;
+        }
+
+        .table th {
+            background-color: #f9fafc;
+            color: #555;
+            font-weight: 600;
+            padding: 15px;
+            border-bottom: 2px solid #f0f0f0;
+            position: sticky;
+            top: 0;
+        }
+
+        .table td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #f0f0f0;
+            vertical-align: middle;
+        }
+
+        .table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .table tr:hover td {
+            background-color: #f8fafd;
+        }
+
+        @media (max-width: 992px) {
+            .sidebar {
+                width: 80px;
+                overflow: hidden;
+            }
+
+            .sidebar .logo-container {
+                padding: 15px 5px;
+            }
+
+            .sidebar .logo {
+                width: 40px;
+            }
+
+            .sidebar .nav-link span {
+                display: none;
+            }
+
+            .sidebar .nav-link i {
+                margin-right: 0;
+                font-size: 1.3rem;
+            }
+
+            .main-content {
+                margin-left: 80px;
+                width: calc(100% - 80px);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <div class="logo-container">
+            <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Логотип" class="logo">
+        </div>
+        <nav class="navbar navbar-expand-lg navbar-dark">
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav flex-column">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('index') }}">
+                            <i class="fas fa-home"></i>
+                            <span>Главная</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('view_blockchain') }}">
+                            <i class="fas fa-link"></i>
+                            <span>Блокчейн</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('admin_panel') }}">
+                            <i class="fas fa-cog"></i>
+                            <span>Администрирование</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('test_transaction') }}">
+                            <i class="fas fa-vial"></i>
+                            <span>Тест транзакции</span>
+                        </a>
+                    </li>
+                </ul>
+            </div>
+        </nav>
+    </div>
+
+    <div class="main-content">
+        <div class="page-header">
+            <h1 class="page-title">
+                <i class="fas fa-envelope mr-2"></i>Управление приглашениями
+            </h1>
+            <a href="{{ url_for('admin_panel') }}" class="btn btn-secondary">
+                <i class="fas fa-arrow-left mr-2"></i>Назад
+            </a>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-plus-circle mr-2"></i>Создать приглашение
+            </div>
+            <div class="card-body">
+                <form method="POST" action="{{ url_for('admin_create_invitation') }}">
+                    {{ form.csrf_token }}
+                    <div class="form-group">
+                        <label for="email" class="form-label">Email (необязательно):</label>
+                        <div class="input-group">
+                            <div class="input-group-prepend">
+                                <span class="input-group-text"><i class="fas fa-envelope"></i></span>
+                            </div>
+                            {{ form.email(class="form-control", id="email", placeholder="Введите email для приглашения") }}
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-plus mr-2"></i>Создать приглашение
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-list mr-2"></i>Список приглашений
+            </div>
+            <div class="card-body p-0">
+                <div class="table-container">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th style="width: 25%;">Код</th>
+                                <th style="width: 20%;">Email</th>
+                                <th style="width: 15%;">Создано</th>
+                                <th style="width: 15%;">Использовано</th>
+                                <th style="width: 25%;">Пользователь</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for invitation in invitations %}
+                                <tr>
+                                    <td><code>{{ invitation.code }}</code></td>
+                                    <td>{{ invitation.email or 'Н/Д' }}</td>
+                                    <td>{{ invitation.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+                                    <td>
+                                        {% if invitation.used_at %}
+                                            {{ invitation.used_at.strftime('%d.%m.%Y %H:%M') }}
+                                        {% else %}
+                                            <span class="badge badge-light">Нет</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if invitation.user_id %}
+                                            <span class="badge badge-primary">ID: {{ invitation.user_id }}</span>
+                                        {% else %}
+                                            <span class="badge badge-secondary">Нет</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.9.3/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+</body>
+</html>
