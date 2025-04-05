@@ -19,6 +19,9 @@ Flask-Session==0.8.0
 flask-cors==4.0.0
 gunicorn==21.2.0  # Для production-сервера
 
+# Асинхронные запросы
+aiohttp==3.9.3
+
 # Удалены конфликтующие пакеты:
 # sqlacodegen - не поддерживает SQLAlchemy 2.0+
 # propcache - устаревший пакет
