@@ -1,27 +1,19 @@
-# Основные зависимости Flask
+# Основные зависимости
 Flask==2.3.3
-Werkzeug==3.0.1  # Совместимая версия с Flask 2.3.3
-Jinja2==3.1.3
-
-# База данных и ORM
-SQLAlchemy==2.0.23
 Flask-SQLAlchemy==3.1.1
-psycopg2-binary==2.9.9  # Для PostgreSQL
-python-dotenv==1.0.0  # Для загрузки .env
+SQLAlchemy==2.0.23
+psycopg2-binary==2.9.10
 
-# Аутентификация и формы
+# Недостающие зависимости из логов
+aiohttp==3.9.3
+redis==5.0.1  # Для работы с Redis
+Flask-Session==0.8.0  # Если используете сессии
+
+# Дополнительные зависимости
 Flask-Login==0.6.3
 Flask-WTF==1.2.1
-WTForms==3.0.1
-
-# Дополнительные модули
-Flask-Session==0.8.0
+python-dotenv==1.0.0
+gunicorn==21.2.0
+Werkzeug==3.0.1
+Jinja2==3.1.3
 flask-cors==4.0.0
-gunicorn==21.2.0  # Для production-сервера
-
-# Асинхронные запросы
-aiohttp==3.9.3
-
-# Удалены конфликтующие пакеты:
-# sqlacodegen - не поддерживает SQLAlchemy 2.0+
-# propcache - устаревший пакет
