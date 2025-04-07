@@ -56,6 +56,7 @@ class Товары(db.Model):
     Наименование = Column(String(255))
     Описание = Column(Text)
     Единица_ИзмеренияID = Column(ForeignKey('Единица_измерения.Единица_ИзмеренияID'))
+    image_path = db.Column(db.String(255))
 
     Единица_измерения = relationship('Единица_измерения', foreign_keys=[Единица_ИзмеренияID])
 
@@ -90,8 +91,10 @@ class ПриходРасход(db.Model):
     Количество = Column(Float)
     Единица_ИзмеренияID = Column(ForeignKey('Единица_измерения.Единица_ИзмеренияID'))
     TransactionHash = Column(String)
-    Timestamp = Column(String)
+    Timestamp = db.Column(db.DateTime)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
 
+    user = db.relationship('User', backref='transactions')
     Тип_документа = relationship('Тип_документа')
     СкладОтправитель = relationship('Склады', foreign_keys=[СкладОтправительID])
     СкладПолучатель = relationship('Склады', foreign_keys=[СкладПолучательID])

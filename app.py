@@ -21,6 +21,7 @@ import aiohttp
 from uuid import uuid4
 from flask_cors import CORS
 from flask_session import Session
+import redis
 
 load_dotenv()
 
@@ -43,7 +44,7 @@ db_host = os.environ.get('DB_HOST')
 db_port = os.environ.get('DB_PORT', '5432')
 db_name = os.environ.get('DB_NAME')
 
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL').replace('postgres://', 'postgresql://', 1)
+app.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}'
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your_default_secret_key')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
@@ -52,6 +53,8 @@ db.init_app(app)
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
+login_manager.login_message = 'Пожалуйста, войдите для доступа к этой странице'
+login_manager.login_message_category = 'info'
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -443,7 +446,9 @@ class Node:
             self.sequence_number += 1
             sequence_number = self.sequence_number
 
+            # Добавляем user_id и timestamp в данные запроса
             request_data['timestamp'] = datetime.datetime.now().isoformat()
+            request_data['user_id'] = sender_id
 
             request_string = json.dumps(request_data, sort_keys=True)
             request_digest = self.generate_digest(request_string.encode('utf-8'))
@@ -451,24 +456,7 @@ class Node:
             self.requests[sequence_number] = request_string
             app.logger.debug(f"Created request with sequence_number {sequence_number}")
 
-            # Флаг для отслеживания успешных отправок
-            successful_sends = 0
-
-            # Попытка отправить сообщения другим узлам
-            for node_id in self.nodes:
-                try:
-                    app.logger.debug(f"Sending pre-prepare message to node {node_id}")
-                    await self.send_message(node_id, 'Pre-prepare', {
-                        'sequence_number': sequence_number,
-                        'digest': request_digest,
-                        'request': request_string
-                    })
-                    successful_sends += 1
-                except Exception as e:
-                    app.logger.error(f"Failed to send message to node {node_id}: {e}")
-
-            # Вызываем apply_transaction напрямую в любом случае
-            app.logger.debug(f"Applying transaction directly on node {self.node_id}")
+            # Применяем транзакцию
             success, message = await self.apply_transaction(sequence_number, request_digest)
 
             if not success:
@@ -476,7 +464,6 @@ class Node:
                 return False, message
 
             if not self.is_leader:
-                app.logger.debug(f"Node {self.node_id} is not leader, calling pre_prepare locally")
                 self.pre_prepare(self.node_id, sequence_number, request_digest, request_string)
 
             return True, "Transaction applied successfully."
@@ -496,33 +483,31 @@ class Node:
             transaction_data = json.loads(request)
             app.logger.debug(f"Transaction data to apply: {transaction_data}")
 
-            transaction_string = json.dumps(transaction_data, sort_keys=True).encode('utf-8')
-            transaction_hash = hashlib.sha256(transaction_string).hexdigest()
-            app.logger.debug(f"Generated transaction hash: {transaction_hash}")
-
             with app.app_context():
                 try:
-                    # Начинаем транзакцию
-                    db.session.begin_nested()  # Создаем savepoint
+                    # Формируем данные для хеширования в точном формате
+                    timestamp = datetime.datetime.now().isoformat()
+                    transaction_for_hash = {
+                        'ДокументID': int(transaction_data['ДокументID']),
+                        'Единица_ИзмеренияID': int(transaction_data['Единица_ИзмеренияID']),
+                        'Количество': float(transaction_data['Количество']),
+                        'СкладОтправительID': int(transaction_data['СкладОтправительID']),
+                        'СкладПолучательID': int(transaction_data['СкладПолучательID']),
+                        'ТоварID': int(transaction_data['ТоварID']),
+                        'timestamp': timestamp,
+                        'user_id': int(transaction_data['user_id'])
+                    }
 
-                    # Проверка наличия товара для расходных документов
-                    if transaction_data['ДокументID'] in [1, 3]:  # ID документов типа "Расходная накладная" и др.
-                        if transaction_data['СкладОтправительID'] != transaction_data['СкладПолучательID']:
-                            # Предварительная проверка наличия товара на складе
-                            запас = Запасы.query.filter_by(
-                                СкладID=transaction_data['СкладОтправительID'],
-                                ТоварID=transaction_data['ТоварID']
-                            ).first()
-
-                            if not запас or запас.Количество < transaction_data['Количество']:
-                                товар = Товары.query.get(transaction_data['ТоварID'])
-                                склад = Склады.query.get(transaction_data['СкладОтправительID'])
-
-                                кол_на_складе = запас.Количество if запас else 0
-                                error_msg = f"Недостаточно товара '{товар.Наименование}' на складе '{склад.Название}'. " \
-                                            f"Требуется: {transaction_data['Количество']}, в наличии: {кол_на_складе}"
-                                db.session.rollback()
-                                return False, error_msg
+                    # Сериализуем с одинаковыми параметрами
+                    transaction_string = json.dumps(
+                        transaction_for_hash,
+                        sort_keys=True,
+                        ensure_ascii=False,
+                        indent=None,
+                        separators=(',', ':')
+                    )
+                    transaction_hash = hashlib.sha256(transaction_string.encode('utf-8')).hexdigest()
+                    app.logger.info(f"Transaction hash generated: {transaction_hash}")
 
                     # Создаем запись о приходе/расходе
                     new_record = ПриходРасход(
@@ -533,13 +518,14 @@ class Node:
                         Количество=transaction_data['Количество'],
                         Единица_ИзмеренияID=transaction_data['Единица_ИзмеренияID'],
                         TransactionHash=transaction_hash,
-                        Timestamp=transaction_data.get('timestamp')
+                        Timestamp=datetime.datetime.fromisoformat(timestamp),
+                        user_id=current_user.id
                     )
 
                     db.session.add(new_record)
-                    db.session.flush()  # Чтобы получить ID новой записи
+                    db.session.flush()
 
-                    # Обновляем запасы
+                    # Обновляем запасы (остается без изменений)
                     # Обработка прихода на склад-получатель
                     success, message = update_запасы(
                         transaction_data['СкладПолучательID'],
@@ -563,18 +549,16 @@ class Node:
                             db.session.rollback()
                             return False, message
 
-                    # Создаем новый блок для блокчейна
+                    # Создаем блок для блокчейна (остается без изменений)
                     last_block = BlockchainBlock.query.order_by(BlockchainBlock.index.desc()).first()
 
                     if last_block:
                         next_index = last_block.index + 1
                         previous_hash = last_block.hash
                     else:
-                        # Создаем генезис-блок, если блоков еще нет
                         next_index = 0
                         previous_hash = '0' * 64
 
-                    # Создаем новый блок
                     new_block = Block(
                         index=next_index,
                         timestamp=datetime.datetime.now(),
@@ -582,7 +566,6 @@ class Node:
                         previous_hash=previous_hash
                     )
 
-                    # Сохраняем блок в БД
                     block_db = BlockchainBlock(
                         index=new_block.index,
                         timestamp=new_block.timestamp,
@@ -593,12 +576,11 @@ class Node:
                     )
 
                     db.session.add(block_db)
-                    db.session.commit()  # Финальный коммит всех изменений
+                    db.session.commit()
 
                     app.logger.info(f"Transaction {transaction_hash} successfully saved to DB")
                     app.logger.info(f"Added new block to chain: {new_block.hash}")
 
-                    # Оповещаем другие узлы о новом блоке
                     await self.broadcast_new_block(new_block.to_dict())
                     return True, "Transaction applied successfully."
 
@@ -813,7 +795,8 @@ async def test_transaction():
             'ТоварID': 1,
             'Количество': 10.0,
             'Единица_ИзмеренияID': 3,
-            'timestamp': datetime.datetime.now().isoformat()
+            'timestamp': datetime.datetime.now().isoformat(),
+            'user_id': current_user.id  # Добавляем ID текущего пользователя
         }
 
         # Получаем текущий узел
@@ -1264,58 +1247,69 @@ def admin_create_invitation():
     app.logger.debug('Exiting admin_create_invitation function')
     return render_template('admin_invitations.html', form=form, invitations=Invitation.query.all())
 
+
 def check_data_integrity(record_id, transaction_data=None):
-    app.logger.debug('Entering check_data_integrity function')
     try:
         record = ПриходРасход.query.get(record_id)
         if not record:
-            app.logger.debug('Exiting check_data_integrity function with error')
-            return {
-                'success': False,
-                'message': "Record not found",
-                'details': "Запись с указанным ID не найдена в базе данных"
-            }
+            return {'success': False, 'message': "Запись не найдена"}
 
-        transaction_data = {
-            'СкладОтправительID': record.СкладОтправительID,
-            'СкладПолучательID': record.СкладПолучательID,
-            'ДокументID': record.ДокументID,
-            'ТоварID': record.ТоварID,
-            'Количество': record.Количество,
-            'Единица_ИзмеренияID': record.Единица_ИзмеренияID,
-            'timestamp': record.Timestamp
-        }
-
-        transaction_data_string = json.dumps(transaction_data, sort_keys=True)
-        computed_hash = hashlib.sha256(transaction_data_string.encode('utf-8')).hexdigest()
-
-        if computed_hash == record.TransactionHash:
-            app.logger.debug('Exiting check_data_integrity function')
-            return {
-                'success': True,
-                'message': "Целостность данных подтверждена",
-                'details': "Хэш транзакции в блокчейне совпадает с вычисленным хэшом данных",
-                'transaction_data': transaction_data,
-                'computed_hash': computed_hash,
-                'stored_hash': record.TransactionHash
-            }
+        # Получаем timestamp в правильном формате
+        if hasattr(record, 'Timestamp'):
+            if isinstance(record.Timestamp, str):
+                # Если это строка, пытаемся распарсить
+                try:
+                    timestamp = datetime.datetime.fromisoformat(record.Timestamp).isoformat()
+                except ValueError:
+                    timestamp = record.Timestamp  # оставляем как есть, если не парсится
+            else:
+                # Если это datetime объект
+                timestamp = record.Timestamp.isoformat()
         else:
-            app.logger.debug('Exiting check_data_integrity function with error')
-            return {
-                'success': False,
-                'message': "Обнаружено несоответствие данных",
-                'details': f"Вычисленный хэш ({computed_hash}) не совпадает с хэшем в записи ({record.TransactionHash})",
-                'transaction_data': transaction_data,
-                'computed_hash': computed_hash,
-                'stored_hash': record.TransactionHash
-            }
-    except Exception as e:
-        app.logger.debug('Exiting check_data_integrity function with error')
-        return {
-            'success': False,
-            'message': "Ошибка при проверке целостности данных",
-            'details': str(e)
+            timestamp = None
+
+        # Формируем данные в точном формате как при создании
+        check_data = {
+            'ДокументID': int(record.ДокументID),
+            'Единица_ИзмеренияID': int(record.Единица_ИзмеренияID),
+            'Количество': float(record.Количество),
+            'СкладОтправительID': int(record.СкладОтправительID),
+            'СкладПолучательID': int(record.СкладПолучательID),
+            'ТоварID': int(record.ТоварID),
+            'timestamp': timestamp,
+            'user_id': int(record.user_id)
         }
+
+        # Сериализуем с теми же параметрами, что и при создании
+        check_string = json.dumps(
+            check_data,
+            sort_keys=True,
+            ensure_ascii=False,
+            indent=None,
+            separators=(',', ':')
+        )
+
+        # Логирование для отладки
+        app.logger.debug(f"Check string for hash: {check_string}")
+        app.logger.debug(f"Record TransactionHash: {record.TransactionHash}")
+
+        computed_hash = hashlib.sha256(check_string.encode('utf-8')).hexdigest()
+
+        return {
+            'success': computed_hash == record.TransactionHash,
+            'message': "Целостность подтверждена" if computed_hash == record.TransactionHash
+            else "Обнаружены проблемы",
+            'details': None if computed_hash == record.TransactionHash else
+            f"Вычисленный хэш ({computed_hash}) не совпадает с сохранённым ({record.TransactionHash})",
+            'transaction_data': check_data,
+            'computed_hash': computed_hash,
+            'stored_hash': record.TransactionHash,
+            'check_string': check_string  # Добавляем для отладки
+        }
+    except Exception as e:
+        app.logger.error(f"Error in check_data_integrity: {str(e)}")
+        return {'success': False, 'message': f"Ошибка проверки: {str(e)}"}
+
 
 @app.route('/check_integrity/<int:record_id>', methods=['POST'])
 @login_required
@@ -1382,6 +1376,144 @@ def update_запасы(склад_id, товар_id, количество):
             app.logger.error(error_message)
             return False, error_message
 
+
+@app.route('/get_record_details/<int:record_id>')
+@login_required
+def get_record_details(record_id):
+    try:
+        # Создаем явные алиасы для складов
+        SenderWarehouse = db.aliased(Склады)
+        ReceiverWarehouse = db.aliased(Склады)
+
+        record = db.session.query(
+            ПриходРасход,
+            SenderWarehouse.Название.label('sender_name'),
+            ReceiverWarehouse.Название.label('receiver_name'),
+            Товары.Наименование,
+            Тип_документа.Тип_документа,
+            Единица_измерения.Единица_Измерения,
+            User.username,
+            User.role,
+            ПриходРасход.TransactionHash,
+            ПриходРасход.Timestamp
+        ).join(
+            SenderWarehouse, ПриходРасход.СкладОтправительID == SenderWarehouse.СкладID
+        ).join(
+            ReceiverWarehouse, ПриходРасход.СкладПолучательID == ReceiverWarehouse.СкладID
+        ).join(
+            Товары, ПриходРасход.ТоварID == Товары.ТоварID
+        ).join(
+            Тип_документа, ПриходРасход.ДокументID == Тип_документа.ДокументID
+        ).join(
+            Единица_измерения, ПриходРасход.Единица_ИзмеренияID == Единица_измерения.Единица_ИзмеренияID
+        ).join(
+            User, ПриходРасход.user_id == User.id
+        ).filter(
+            ПриходРасход.ПриходРасходID == record_id
+        ).first()
+
+        if not record:
+            return jsonify({'success': False, 'message': 'Запись не найдена'}), 404
+
+        (record_data, sender_name, receiver_name, item_name,
+         doc_type, unit, username, role, tx_hash, timestamp) = record
+
+        # Форматируем дату
+        if timestamp:
+            if isinstance(timestamp, str):
+                try:
+                    op_date = datetime.datetime.fromisoformat(timestamp).strftime('%d.%m.%Y %H:%M')
+                except ValueError:
+                    op_date = timestamp
+            else:
+                op_date = timestamp.strftime('%d.%m.%Y %H:%M')
+        else:
+            op_date = 'Не указана'
+
+        # Определяем узел блокчейна
+        node_mapping = {'admin': 0, 'north': 1, 'south': 2}
+        node_id = node_mapping.get(role.lower(), None)
+        node_info = f'Узел #{node_id} ({role})' if node_id is not None else f'Узел не определен (роль: {role})'
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'record_id': record_data.ПриходРасходID,
+                'sender_warehouse': sender_name or 'Не указан',
+                'receiver_warehouse': receiver_name or 'Не указан',
+                'document_type': doc_type or 'Не указан',
+                'item_name': item_name or 'Не указан',
+                'quantity': float(record_data.Количество),
+                'unit': unit or 'Не указана',
+                'operation_date': op_date,
+                'transaction_hash': tx_hash,
+                'user_name': username or 'Неизвестный',
+                'user_role': role or 'Не указана',
+                'node_info': node_info
+            }
+        })
+    except Exception as e:
+        app.logger.error(f"Error in get_record_details: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': str(e),
+            'error_type': type(e).__name__
+        }), 500
+
+@app.route('/confirm_in_blockchain/<int:record_id>', methods=['POST'])
+@login_required
+async def confirm_in_blockchain(record_id):  # Добавили async здесь
+    try:
+        record = ПриходРасход.query.get(record_id)
+        if not record:
+            return jsonify({'success': False, 'message': 'Запись не найдена'}), 404
+
+        if record.TransactionHash:
+            return jsonify({'success': False, 'message': 'Запись уже подтверждена в блокчейне'}), 400
+
+        transaction_data = {
+            'record_id': record.ПриходРасходID,
+            'sender_warehouse': record.СкладОтправительID,
+            'receiver_warehouse': record.СкладПолучательID,
+            'item_id': record.ТоварID,
+            'quantity': float(record.Количество),
+            'timestamp': record.Timestamp.isoformat() if record.Timestamp else None,
+            'user_id': current_user.id
+        }
+
+        node_id = None
+        if current_user.role == 'admin':
+            node_id = 0
+        elif current_user.role == 'north':
+            node_id = 1
+        elif current_user.role == 'south':
+            node_id = 2
+
+        if node_id is None:
+            node_info = f'Узел #{node_id} ({user_role})' if node_id is not None else 'Не указан'
+
+        # Получаем экземпляр узла
+        node = nodes.get(node_id)
+        if not node:
+            return jsonify({'success': False, 'message': 'Узел блокчейна не найден'}), 500
+
+        # Используем await, так как функция теперь async
+        success, message = await node.handle_request(current_user.id, transaction_data)
+
+        if success:
+            # Обновляем запись в базе данных
+            record.TransactionHash = hashlib.sha256(
+                json.dumps(transaction_data, sort_keys=True).encode('utf-8')
+            ).hexdigest()
+            db.session.commit()
+            return jsonify({'success': True, 'message': 'Запись подтверждена в блокчейне'})
+        else:
+            return jsonify({'success': False, 'message': message}), 500
+
+    except Exception as e:
+        app.logger.error(f"Error confirming in blockchain: {str(e)}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 @app.route('/get_unit_of_measurement/<int:item_id>', methods=['GET'])
 def get_unit_of_measurement(item_id):
     товар = Товары.query.get(item_id)
@@ -1402,13 +1534,17 @@ def get_item_info(item_id):
 
         unit = Единица_измерения.query.get(item.Единица_ИзмеренияID)
 
+        # Формируем путь к изображению
+        image_url = url_for('static', filename=f'img/products/{item.image_path}') if item.image_path else None
+
         return jsonify({
             'success': True,
             'item_id': item.ТоварID,
             'item_name': item.Наименование,
             'description': item.Описание if hasattr(item, 'Описание') else 'Не указано',
             'unit': unit.Единица_Измерения if unit else 'не указано',
-            'unit_id': item.Единица_ИзмеренияID
+            'unit_id': item.Единица_ИзмеренияID,
+            'image_url': image_url  # Добавляем URL изображения
         })
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)})

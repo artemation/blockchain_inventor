@@ -518,6 +518,19 @@
         ::-webkit-scrollbar-thumb:hover {
             background: var(--primary-color);
         }
+
+        /* Изображение товара */
+        .img-product {
+            max-width: 100%;
+            height: auto;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            transition: transform 0.3s ease;
+        }
+
+        .img-product:hover {
+            transform: scale(1.03);
+        }
     </style>
 </head>
 <body>
@@ -824,47 +837,75 @@
             type: 'GET',
             success: function(response) {
                 if (response.success) {
-                    $('#detailsModalLabel').html(`<i class="fas fa-info-circle mr-2"></i>Детали записи #${recordId}`);
-                    $('#detailsContent').html(`
+                    const data = response.data;
+                    let detailsHtml = `
                         <div class="record-details">
                             <div class="row mb-3">
                                 <div class="col-md-6">
+                                    <h6 class="font-weight-bold">Дата операции:</h6>
+                                    <p>${data.operation_date}</p>
+                                </div>
+                                <div class="col-md-6">
+                                    <h6 class="font-weight-bold">Тип операции:</h6>
+                                    <p>${data.document_type}</p>
+                                </div>
+                            </div>
+                            <div class="row mb-3">
+                                <div class="col-md-6">
                                     <h6 class="font-weight-bold">Склад отправитель:</h6>
-                                    <p>${response.data.sender_warehouse || 'Не указано'}</p>
+                                    <p>${data.sender_warehouse}</p>
                                 </div>
                                 <div class="col-md-6">
                                     <h6 class="font-weight-bold">Склад получатель:</h6>
-                                    <p>${response.data.receiver_warehouse || 'Не указано'}</p>
+                                    <p>${data.receiver_warehouse}</p>
                                 </div>
                             </div>
                             <div class="row mb-3">
-                                <div class="col-md-6">
-                                    <h6 class="font-weight-bold">Тип документа:</h6>
-                                    <p>${response.data.document_type || 'Не указано'}</p>
-                                </div>
                                 <div class="col-md-6">
                                     <h6 class="font-weight-bold">Товар:</h6>
-                                    <p>${response.data.item_name || 'Не указано'}</p>
+                                    <p>${data.item_name}</p>
+                                </div>
+                                <div class="col-md-6">
+                                    <h6 class="font-weight-bold">Количество:</h6>
+                                    <p>${data.quantity} ${data.unit}</p>
                                 </div>
                             </div>
                             <div class="row mb-3">
                                 <div class="col-md-6">
-                                    <h6 class="font-weight-bold">Количество:</h6>
-                                    <p>${response.data.quantity || '0'} ${response.data.unit || ''}</p>
+                                    <h6 class="font-weight-bold">Пользователь:</h6>
+                                    <p>${data.user_name} (${data.user_role})</p>
                                 </div>
                                 <div class="col-md-6">
-                                    <h6 class="font-weight-bold">Дата операции:</h6>
-                                    <p>${response.data.operation_date || 'Не указана'}</p>
+                                    <h6 class="font-weight-bold">Узел блокчейна:</h6>
+                                    <p>${data.node_info}</p>
                                 </div>
                             </div>
-                            ${response.data.transaction_hash ? `
+                    `;
+
+                    if (data.transaction_hash) {
+                        detailsHtml += `
                             <div class="bg-light p-3 rounded mt-3">
-                                <h6 class="font-weight-bold">Хеш транзакции:</h6>
-                                <code>${response.data.transaction_hash}</code>
+                                <h6 class="font-weight-bold">Данные блокчейна:</h6>
+                                <div class="mb-2">
+                                    <span class="text-muted">Хеш транзакции:</span>
+                                    <code class="d-block mt-1">${data.transaction_hash}</code>
+                                </div>
+                                <button class="btn btn-sm btn-outline-secondary mt-2" onclick="copyToClipboard('${data.transaction_hash}')">
+                                    <i class="fas fa-copy mr-1"></i> Копировать хеш
+                                </button>
                             </div>
-                            ` : ''}
-                        </div>
-                    `);
+                        `;
+                    } else {
+                        detailsHtml += `
+                            <div class="alert alert-warning mt-3">
+                                <i class="fas fa-exclamation-triangle mr-2"></i>
+                                Запись еще не подтверждена в блокчейне.
+                            </div>
+                        `;
+                    }
+
+                    detailsHtml += `</div>`;
+                    $('#detailsContent').html(detailsHtml);
                 } else {
                     $('#detailsContent').html(`
                         <div class="text-center text-danger">
@@ -875,15 +916,51 @@
                     `);
                 }
             },
-            error: function() {
+            error: function(xhr) {
                 $('#detailsContent').html(`
                     <div class="text-center text-danger">
                         <i class="fas fa-exclamation-circle fa-3x mb-3"></i>
                         <h5 class="font-weight-bold">Ошибка</h5>
-                        <p>Произошла ошибка при загрузке данных</p>
+                        <p>${xhr.responseJSON?.message || 'Произошла ошибка при загрузке данных'}</p>
                     </div>
                 `);
             }
+        });
+    }
+
+    // Функция для подтверждения в блокчейне
+    function confirmInBlockchain(recordId) {
+        $.ajax({
+            url: '/confirm_in_blockchain/' + recordId,
+            type: 'POST',
+            headers: {
+                'X-CSRFToken': '{{ csrf_token() }}'
+            },
+            success: function(response) {
+                if (response.success) {
+                    showAlert('Запись успешно подтверждена в блокчейне', 'success');
+                    showRecordDetails(recordId); // Обновляем данные
+                } else {
+                    showAlert('Ошибка: ' + response.message, 'danger');
+                }
+            },
+            error: function(xhr) {
+                showAlert('Ошибка при подтверждении: ' + xhr.responseJSON?.message, 'danger');
+            }
+        });
+    }
+
+    // Функция для просмотра транзакции в блокчейне
+    function viewInBlockchain(hash) {
+        window.open('/blockchain?search=' + encodeURIComponent(hash), '_blank');
+    }
+
+    // Функция для копирования хеша в буфер обмена
+    function copyToClipboard(text) {
+        navigator.clipboard.writeText(text).then(function() {
+            showAlert('Хеш скопирован в буфер обмена', 'success');
+        }, function(err) {
+            showAlert('Ошибка при копировании: ' + err, 'danger');
         });
     }
 
@@ -1072,7 +1149,14 @@
 
         // Функция для обновления информации о товаре
         function updateItemInfo(data) {
+            let imageHtml = data.image_url ?
+                `<div class="text-center mb-3">
+                    <img src="${data.image_url}" alt="${data.item_name}" class="img-fluid rounded" style="max-height: 200px;">
+                </div>` :
+                '<div class="text-center mb-3"><i class="fas fa-box-open fa-3x text-muted"></i></div>';
+
             let html = `
+                ${imageHtml}
                 <div class="row">
                     <div class="col-md-6">
                         <h5 class="font-weight-bold mb-3">${data.item_name}</h5>
