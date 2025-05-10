@@ -7,7 +7,12 @@ class RegistrationForm(FlaskForm):
     username = StringField('Имя пользователя', validators=[DataRequired(), Length(min=4, max=255)])
     password = PasswordField('Пароль', validators=[DataRequired(), Length(min=6, max=255)])
     confirm_password = PasswordField('Подтвердите пароль', validators=[DataRequired(), EqualTo('password')])
-    role = SelectField('Роль', choices=[('admin', 'Администратор'), ('north', 'Склад на севере'), ('south', 'Склад на юге')], validators=[DataRequired()])
+    role = SelectField('Роль', choices=[
+        ('admin', 'Администратор'),
+        ('north', 'Склад на севере'),
+        ('south', 'Склад на юге'),
+        ('west', 'Склад на западе')  # Добавлена новая роль
+    ], validators=[DataRequired()])
     invitation_code = StringField('Код приглашения', validators=[DataRequired()])
     submit = SubmitField('Зарегистрироваться')
 
