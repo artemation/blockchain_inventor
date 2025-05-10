@@ -558,13 +558,14 @@ class Node:
     async def check_node_availability(self, node_id):
         if node_id == self.node_id:
             return True
-
+        
         try:
             async with aiohttp.ClientSession() as session:
-                url = f"https://{self.nodes[node_id].host}:{self.nodes[node_id].port}/health"
+                url = f"https://{self.nodes[node_id].host}/health"
                 async with session.get(url, timeout=2) as response:
                     return response.status == 200
-        except:
+        except Exception as e:
+            app.logger.error(f"Error checking node {node_id} availability: {e}")
             return False
 
 
@@ -762,13 +763,15 @@ for i in range(4):
     nodes[i] = Node(
         node_id=i,
         nodes={
-            j: {
-                'host': NODE_DOMAINS[j],
-                'port': 443  # Railway использует 443 для HTTPS
-            } for j in range(4) if j != i
+            j: Node(  # Создаем объекты Node для других узлов
+                node_id=j,
+                nodes={},  # Пустой словарь, так как он будет заполнен позже
+                host=NODE_DOMAINS[j],
+                port=443  # Railway использует 443 для HTTPS
+            ) for j in range(4) if j != i
         },
-        host='0.0.0.0',
-        port=PORT
+        host=NODE_DOMAINS[i],  # Используем домен из переменных окружения
+        port=443  # Railway использует 443 для HTTPS
     )
 current_node = nodes[NODE_ID]
 
@@ -782,15 +785,17 @@ with app.app_context():
 def serialize_data(data):
     return json.dumps(data, ensure_ascii=False, sort_keys=True)
 
-async def check_node_availability_sync(node_id):
-    """Синхронная проверка доступности узла"""
-    node = nodes.get(node_id)
-    if not node:
-        return False
+async def check_node_availability(self, node_id):
+    if node_id == self.node_id:
+        return True
+    
     try:
-        response = requests.get(f'https://{node.host}:{node.port}/health', timeout=2)
-        return response.status_code == 200
-    except:
+        async with aiohttp.ClientSession() as session:
+            url = f"https://{self.nodes[node_id].host}/health"
+            async with session.get(url, timeout=2) as response:
+                return response.status == 200
+    except Exception as e:
+        app.logger.error(f"Error checking node {node_id} availability: {e}")
         return False
 
 @app.route('/receive_block', methods=['POST'])
