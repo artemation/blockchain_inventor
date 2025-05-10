@@ -504,6 +504,17 @@ class Node:
                 failed_nodes.append(node_id)
                 return False
 
+        # Проверяем доступность всех узлов перед рассылкой
+        available_nodes = []
+        for node_id in self.nodes:
+            if await check_node_availability(node_id):
+                available_nodes.append(node_id)
+
+        # Рассылаем только доступным узлам
+        for node_id in available_nodes:
+            if node_id != self.node_id:
+                await send_to_node(node_id, self.nodes[node_id])
+
         # 6. Параллельная рассылка
         try:
             semaphore = asyncio.Semaphore(4)  # Ограничение одновременных запросов
@@ -544,10 +555,10 @@ class Node:
         return confirmations, len(self.nodes)
 
     # Проверка доступности узла
-    async def check_node_availability(node_id):
+    async def check_node_availability(self, node_id):
         if node_id == self.node_id:
             return True
-            
+
         try:
             async with aiohttp.ClientSession() as session:
                 url = f"https://{self.nodes[node_id].host}:{self.nodes[node_id].port}/health"
@@ -555,17 +566,7 @@ class Node:
                     return response.status == 200
         except:
             return False
-    
-    # Проверяем доступность всех узлов перед рассылкой
-    available_nodes = []
-    for node_id in self.nodes:
-        if await check_node_availability(node_id):
-            available_nodes.append(node_id)
-    
-    # Рассылаем только доступным узлам
-    for node_id in available_nodes:
-        if node_id != self.node_id:
-            await send_to_node(node_id, self.nodes[node_id])
+
 
     async def handle_request(self, sender_id, request_data):
         try:
