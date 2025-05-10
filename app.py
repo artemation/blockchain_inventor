@@ -14,7 +14,7 @@ import json
 from sqlalchemy import text, select
 from flask_wtf.csrf import CSRFProtect
 import threading
-import datetime
+from datetime import datetime, timezone
 import psycopg2
 import asyncio
 import aiohttp
