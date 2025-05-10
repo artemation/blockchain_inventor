@@ -1909,45 +1909,29 @@ async def nodes_status():
 @app.route('/get_block_details/<int:block_index>')
 def get_block_details(block_index):
     try:
-        # Получаем все блоки с этим индексом (подтверждения от разных узлов)
-        blocks = BlockchainBlock.query.filter_by(index=block_index).all()
-        if not blocks:
+        # Получаем основной блок
+        block = BlockchainBlock.query.filter_by(index=block_index).first()
+        if not block:
             return jsonify({'error': 'Block not found'}), 404
 
-        # Основной блок (первый в списке)
-        main_block = blocks[0]
-        
-        # Узлы, подтвердившие этот блок
-        confirming_nodes = [block.node_id for block in blocks]
-        
-        # Проверяем доступность узлов
-        available_nodes = []
-        for node_id in nodes:
-            if node_id == NODE_ID:  # Текущий узел всегда доступен
-                available_nodes.append(node_id)
-                continue
-            
-            try:
-                response = requests.get(
-                    f'https://{nodes[node_id].host}/health',
-                    timeout=2
-                )
-                if response.status_code == 200:
-                    available_nodes.append(node_id)
-            except:
-                continue
+        # Получаем все подтверждения этого блока (блоки с тем же индексом)
+        confirming_blocks = BlockchainBlock.query.filter_by(index=block_index).all()
+        confirming_nodes = [b.node_id for b in confirming_blocks]
+
+        # Получаем транзакции
+        transactions = json.loads(block.transactions) if block.transactions else []
 
         return jsonify({
-            'index': main_block.index,
-            'timestamp': main_block.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
-            'hash': main_block.hash,
-            'previous_hash': main_block.previous_hash,
-            'node_id': main_block.node_id,
-            'tx_count': len(json.loads(main_block.transactions)),
+            'index': block.index,
+            'timestamp': block.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+            'transactions': transactions,
+            'hash': block.hash,
+            'previous_hash': block.previous_hash,
+            'node_id': block.node_id,
+            'tx_count': len(transactions),
             'confirmations': len(confirming_nodes),
-            'total_nodes': len(nodes),
-            'confirming_nodes': confirming_nodes,
-            'available_nodes': available_nodes
+            'total_nodes': len(nodes),  # Общее количество узлов в сети
+            'confirming_nodes': confirming_nodes  # Список ID узлов, подтвердивших блок
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
