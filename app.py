@@ -463,10 +463,10 @@ class Node:
         # 5. Настройки для рассылки
         confirmations = 1  # Текущий узел всегда подтверждает
         failed_nodes = []
+        confirming_nodes = set()  # Используем set для избежания дубликатов
         timeout = aiohttp.ClientTimeout(total=10)
-
+    
         async def send_to_node(node_id, node):
-            """Внутренняя функция для отправки блока одному узлу"""
             nonlocal confirmations
             try:
                 # Проверка доступности узла
@@ -474,32 +474,17 @@ class Node:
                     app.logger.warning(f"Node {node_id} is not available")
                     failed_nodes.append(node_id)
                     return False
-
+    
                 url = f"https://{node.host}:{node.port}/receive_block"
-
+    
                 async with aiohttp.ClientSession(headers=headers) as session:
-                    try:
-                        async with session.post(url, json=payload, timeout=timeout) as response:
-                            if response.status == 200:
+                    async with session.post(url, json=payload, timeout=timeout) as response:
+                        if response.status == 200:
+                            if node_id not in confirming_nodes:  # Проверяем, что узел еще не подтвердил
+                                confirming_nodes.add(node_id)
                                 confirmations += 1
-                                app.logger.debug(f"Node {node_id} accepted block #{block_data['index']}")
-                                return True
-                            else:
-                                error_text = await response.text()
-                                app.logger.error(
-                                    f"Node {node_id} rejected block #{block_data['index']}. "
-                                    f"Status: {response.status}, Error: {error_text}"
-                                )
-                                failed_nodes.append(node_id)
-                                return False
-                    except asyncio.TimeoutError:
-                        app.logger.warning(f"Timeout when sending to node {node_id}")
-                        failed_nodes.append(node_id)
-                        return False
-                    except Exception as e:
-                        app.logger.error(f"Error sending to node {node_id}: {str(e)}", exc_info=True)
-                        failed_nodes.append(node_id)
-                        return False
+                            app.logger.debug(f"Node {node_id} accepted block #{block_data['index']}")
+                            return True
             except Exception as e:
                 app.logger.error(f"Unexpected error with node {node_id}: {str(e)}", exc_info=True)
                 failed_nodes.append(node_id)
@@ -1935,27 +1920,14 @@ def get_block_details(block_index):
 if __name__ == '__main__':
     print(f"Запуск узла {NODE_ID} на порту {PORT}")
     print(f"Известные узлы: {nodes[NODE_ID].nodes}")
-    import sys
-
-    # Параметры узла по умолчанию
-    node_id = 0
-    port = 5000
-
-    # Аргументы командной строки (для локального тестирования)
-    if len(sys.argv) > 1:
+    
+    # Добавьте эту часть для синхронизации при старте
+    with app.app_context():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            node_id = int(sys.argv[1])
-            if node_id in nodes:
-                port = nodes[node_id].port
-            else:
-                print(f"Ошибка: Узел с ID {node_id} не существует")
-                sys.exit(1)
-        except ValueError:
-            print("Ошибка: ID узла должен быть целым числом")
-            sys.exit(1)
-
-    # Для Railway - используем порт из переменной окружения
-    port = int(os.environ.get('PORT', port))
-
-    print(f"Запуск узла {node_id} на порту {port}")
+            loop.run_until_complete(nodes[NODE_ID].sync_blockchain())
+        finally:
+            loop.close()
+    
     app.run(host='0.0.0.0', port=port)
