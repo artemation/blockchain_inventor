@@ -228,37 +228,40 @@ class Node:
 
     # В начале работы узла
     async def sync_blockchain(self):
-        """Синхронизировать блокчейн с другими узлами при запуске"""
-        app.logger.info(f"Node {self.node_id} начинает синхронизацию блокчейна")
-
+        app.logger.info(f"Node {self.node_id} starts blockchain sync")
+        
         # Получаем последний локальный блок
         with app.app_context():
             local_last_block = BlockchainBlock.query.order_by(BlockchainBlock.index.desc()).first()
             local_index = local_last_block.index if local_last_block else -1
-
-        # Запрашиваем у других узлов их последние блоки
+        
+        # Запрашиваем высоту блокчейна у других узлов
+        heights = {}
         for node_id, node in self.nodes.items():
             if node_id != self.node_id:
                 try:
-                    host = node.host
-                    port = node.port
-
                     async with aiohttp.ClientSession() as session:
-                        url = f"https://{host}:{port}/get_blockchain_height"
-                        async with session.get(url) as response:
+                        url = f"https://{node.host}:{node.port}/get_blockchain_height"
+                        async with session.get(url, timeout=5) as response:
                             if response.status == 200:
                                 data = await response.json()
-                                remote_height = data.get('height', -1)
-
-                                # Если у удаленного узла блокчейн длиннее
-                                if remote_height > local_index:
-                                    # Запрашиваем недостающие блоки
-                                    for i in range(local_index + 1, remote_height + 1):
-                                        await self.request_block_from_node(node_id, i)
+                                heights[node_id] = data.get('height', -1)
                 except Exception as e:
-                    app.logger.error(f"Error during blockchain sync with node {node_id}: {e}")
-
-        app.logger.info(f"Node {self.node_id} закончил синхронизацию блокчейна")
+                    app.logger.error(f"Error getting height from node {node_id}: {e}")
+        
+        # Находим максимальную высоту
+        max_height = max(heights.values()) if heights else local_index
+        
+        # Синхронизируем недостающие блоки
+        if max_height > local_index:
+            app.logger.info(f"Need to sync from {local_index + 1} to {max_height}")
+            for i in range(local_index + 1, max_height + 1):
+                # Пытаемся получить блок с каждого узла
+                for node_id in heights:
+                    if heights[node_id] >= i:
+                        success = await self.request_block_from_node(node_id, i)
+                        if success:
+                            break
 
     async def request_block_from_node(self, node_id, block_index):
         """Запросить блок с определенным индексом у узла"""
@@ -528,7 +531,7 @@ class Node:
         )
 
         # Проверяем достижение консенсуса (2f + 1 подтверждений)
-        required_confirmations = (len(self.nodes) - 1) // 3 * 2 + 1  # 2f+1
+        required_confirmations = (len(available_nodes) // 3 * 2 + 1  # 2f+1
         consensus_reached = confirmations >= required_confirmations
 
         if consensus_reached:
@@ -541,22 +544,28 @@ class Node:
         return confirmations, len(self.nodes)
 
     # Проверка доступности узла
-    async def check_node_availability(self, node_id):
-        """Проверка доступности узла по его ID"""
+    async def check_node_availability(node_id):
         if node_id == self.node_id:
-            return True  # Текущий узел всегда доступен
-            
-        node = self.nodes.get(node_id)
-        if not node:
-            return False
+            return True
             
         try:
             async with aiohttp.ClientSession() as session:
-                url = f"https://{node.host}:{node.port}/health"
+                url = f"https://{self.nodes[node_id].host}:{self.nodes[node_id].port}/health"
                 async with session.get(url, timeout=2) as response:
                     return response.status == 200
         except:
             return False
+    
+    # Проверяем доступность всех узлов перед рассылкой
+    available_nodes = []
+    for node_id in self.nodes:
+        if await check_node_availability(node_id):
+            available_nodes.append(node_id)
+    
+    # Рассылаем только доступным узлам
+    for node_id in available_nodes:
+        if node_id != self.node_id:
+            await send_to_node(node_id, self.nodes[node_id])
 
     async def handle_request(self, sender_id, request_data):
         try:
@@ -1847,11 +1856,25 @@ def get_item_info(item_id):
 
 @app.route('/nodes_status')
 @login_required
-async def nodes_status():  # Сделайте функцию асинхронной
+async def nodes_status():
     nodes_info = []
     for node_id, node in nodes.items():
-        # Используем асинхронную проверку доступности
-        is_online = await node.check_node_availability(node_id) if node_id != 0 else True
+        # Для текущего узла (node_id=0) всегда возвращаем True
+        if node_id == 0:
+            is_online = True
+        else:
+            try:
+                # Используем асинхронную проверку с таймаутом
+                async with aiohttp.ClientSession() as session:
+                    url = f"https://{node.host}:{node.port}/health"
+                    try:
+                        async with session.get(url, timeout=2) as response:
+                            is_online = response.status == 200
+                    except (aiohttp.ClientError, asyncio.TimeoutError):
+                        is_online = False
+            except Exception as e:
+                app.logger.error(f"Error checking node {node_id} status: {e}")
+                is_online = False
         
         # Получаем количество блоков
         with app.app_context():
