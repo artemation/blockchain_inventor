@@ -1900,7 +1900,7 @@ def get_block_details(block_index):
 
 if __name__ == '__main__':
     print(f"Запуск узла {NODE_ID} на порту {PORT}")
-    print(f"Известные узлы: {nodes[NODE_ID].nodes}"
+    print(f"Известные узлы: {nodes[NODE_ID].nodes}")
     import sys
 
     # Параметры узла по умолчанию
