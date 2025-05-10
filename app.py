@@ -786,23 +786,24 @@ async def check_node_availability(self, node_id):
 
 @app.route('/receive_block', methods=['POST'])
 @csrf.exempt
-def receive_block():  # Убрали async, так как Flask работает синхронно
+def receive_block():
     """Обработчик для приема новых блоков от других узлов сети"""
     processing_start = time.time()
     app.logger.info("\n" + "=" * 50)
     app.logger.info(f"Starting block processing at {datetime.now(timezone.utc)}")
 
     def json_serial(obj):
+        """Вспомогательная функция для сериализации datetime"""
         if isinstance(obj, (datetime, date)):
             return obj.isoformat()
         raise TypeError(f"Type {type(obj)} not serializable")
 
     try:
-        # Проверяем Content-Type
+        # 1. Проверяем Content-Type
         if request.content_type != 'application/json':
             return jsonify({"error": "Content-Type must be application/json"}), 400
 
-        # Получаем данные (синхронно)
+        # 2. Получаем данные
         try:
             data = request.get_json()
             if not data:
@@ -810,54 +811,75 @@ def receive_block():  # Убрали async, так как Flask работает
         except Exception as e:
             return jsonify({"error": f"Invalid JSON: {str(e)}"}), 400
 
-        # Проверка обязательных полей
+        # 3. Проверка обязательных полей
         required_fields = ['sender_id', 'block', 'node_id']
         if not all(field in data for field in required_fields):
             return jsonify({"error": f"Missing fields: {required_fields}"}), 400
 
         block = data['block']
+        sender_id = data['sender_id']
+        creator_node_id = data['node_id']
 
-        # Валидация блока
+        # 4. Валидация блока
         required_block_fields = ['index', 'transactions', 'previous_hash', 'hash']
         if not all(field in block for field in required_block_fields):
             return jsonify({"error": f"Invalid block structure"}), 400
 
-        # Проверка хеша
+        # 5. Проверяем, не является ли этот блок дубликатом
+        existing_block = BlockchainBlock.query.filter_by(
+            index=block['index'],
+            node_id=creator_node_id
+        ).first()
+        
+        if existing_block:
+            app.logger.info(f"Block #{block['index']} from node {creator_node_id} already exists")
+            return jsonify({"status": "Block already exists"}), 200
+
+        # 6. Проверка хеша
         block_copy = {k: v for k, v in block.items() if k != 'hash'}
         block_str = json.dumps(block_copy, sort_keys=True, default=json_serial)
         calculated_hash = hashlib.sha256(block_str.encode()).hexdigest()
 
         if calculated_hash != block['hash']:
+            app.logger.error(f"Block hash mismatch for block #{block['index']}")
             return jsonify({"error": "Block hash mismatch"}), 400
 
-        # Проверка существования блока
-        if BlockchainBlock.query.filter_by(hash=block['hash']).first():
-            return jsonify({"status": "Block already exists"}), 200
-
-        # Проверка последовательности
+        # 7. Проверка последовательности
         last_block = BlockchainBlock.query.order_by(BlockchainBlock.index.desc()).first()
         if last_block and (block['index'] != last_block.index + 1 or
                            block['previous_hash'] != last_block.hash):
+            app.logger.error(f"Invalid block sequence for block #{block['index']}")
             return jsonify({"error": "Invalid block sequence"}), 400
 
-        # Сохранение блока
+        # 8. Сохранение блока
         new_block = BlockchainBlock(
             index=block['index'],
             timestamp=datetime.fromisoformat(block['timestamp']),
             transactions=json.dumps(block['transactions']),
             previous_hash=block['previous_hash'],
             hash=block['hash'],
-            node_id=data['node_id']
+            node_id=creator_node_id
         )
+        
         db.session.add(new_block)
         db.session.commit()
 
-        return jsonify({"status": "Block accepted"}), 200
+        app.logger.info(f"Block #{block['index']} from node {creator_node_id} accepted")
+        processing_time = time.time() - processing_start
+        app.logger.info(f"Block processing completed in {processing_time:.2f} seconds")
+
+        return jsonify({
+            "status": "Block accepted",
+            "processing_time": f"{processing_time:.2f} seconds"
+        }), 200
 
     except Exception as e:
         db.session.rollback()
-        app.logger.error(f"Error: {str(e)}", exc_info=True)
-        return jsonify({"error": "Internal server error"}), 500
+        app.logger.error(f"Error processing block: {str(e)}", exc_info=True)
+        return jsonify({
+            "error": "Internal server error",
+            "details": str(e)
+        }), 500
 
 
 @app.route('/inventory_report')
@@ -1044,56 +1066,53 @@ def pprint_filter(data):
 @app.route('/blockchain')
 @login_required
 def view_blockchain():
+    """Отображает всю цепочку блоков с информацией о подтверждениях"""
     try:
         # 1. Получаем все блоки из БД, сортируем по индексу
         blocks = BlockchainBlock.query.order_by(BlockchainBlock.index).all()
 
-        # 2. Получаем список всех узлов и проверяем их доступность
+        # 2. Создаем словарь для подсчета подтверждений каждого блока
+        block_confirmations = {}
+        for block in blocks:
+            if block.index not in block_confirmations:
+                block_confirmations[block.index] = set()
+            block_confirmations[block.index].add(block.node_id)
+
+        # 3. Получаем список всех узлов и проверяем их доступность
         available_nodes = []
-        for node_id, node in nodes.items():
-            if node_id == 0:  # Текущий узел (0) всегда считается доступным
+        for node_id in nodes:
+            if node_id == NODE_ID:  # Текущий узел всегда доступен
                 available_nodes.append(node_id)
                 continue
-
+            
             try:
-                # Синхронная проверка доступности узла
+                # Проверяем доступность узла
                 response = requests.get(
-                    f'https://{node.host}:{node.port}/health',
+                    f'https://{nodes[node_id].host}/health',
                     timeout=2
                 )
                 if response.status_code == 200:
                     available_nodes.append(node_id)
             except:
-                pass  # Узел недоступен
+                continue  # Узел недоступен
 
-        # 3. Получаем справочные данные из базы
+        # 4. Получаем справочные данные из базы
         warehouses = {w.СкладID: w.Название for w in Склады.query.all()}
         documents = {d.ДокументID: d.Тип_документа for d in Тип_документа.query.all()}
         products = {p.ТоварID: p.Наименование for p in Товары.query.all()}
         units = {u.Единица_ИзмеренияID: u.Единица_Измерения for u in Единица_измерения.query.all()}
 
-        # 4. Формируем данные для отображения
+        # 5. Формируем данные для отображения
         formatted_blocks = []
         for block in blocks:
             try:
                 # Загружаем транзакции из JSON
                 transactions = json.loads(block.transactions)
 
-                # Для каждого блока проверяем подтверждения от других узлов
-                confirmations = 1  # Текущий узел всегда подтвердил
-                for node_id in available_nodes:
-                    if node_id == block.node_id:  # Не проверяем узел, который создал блок
-                        continue
-
-                    # Проверяем, есть ли такой же блок от другого узла
-                    confirmed_block = BlockchainBlock.query.filter_by(
-                        index=block.index,
-                        node_id=node_id,
-                        hash=block.hash  # Важно проверять именно хеш
-                    ).first()
-
-                    if confirmed_block:
-                        confirmations += 1
+                # Получаем подтверждения для этого блока
+                confirmations = len(block_confirmations.get(block.index, set()))
+                total_nodes = len(nodes)
+                confirming_nodes = list(block_confirmations.get(block.index, []))
 
                 # Обогащаем данные транзакций
                 enriched_transactions = []
@@ -1122,7 +1141,8 @@ def view_blockchain():
                     'node_id': block.node_id,
                     'is_genesis': block.index == 0,
                     'confirmations': confirmations,
-                    'total_nodes': len(nodes)  # Общее количество узлов в сети
+                    'total_nodes': total_nodes,
+                    'confirming_nodes': confirming_nodes
                 })
 
             except json.JSONDecodeError as e:
