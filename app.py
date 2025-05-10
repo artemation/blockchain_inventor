@@ -36,7 +36,9 @@ NODE_DOMAINS = {
 CORS(app, resources={
     r"/receive_block": {"origins": [f"https://{domain}" for domain in NODE_DOMAINS.values()]},
     r"/node_message": {"origins": [f"https://{domain}" for domain in NODE_DOMAINS.values()]},
-    r"/health": {"origins": "*"}
+    r"/health": {"origins": "*"},
+    r"/get_block/*": {"origins": "*"},
+    r"/get_blockchain_height": {"origins": "*"}
 })
 app.logger.setLevel(logging.DEBUG)  # Убедитесь, что уровень логирования установлен на DEBUG
 
@@ -242,7 +244,7 @@ class Node:
                     port = node.port
 
                     async with aiohttp.ClientSession() as session:
-                        url = f"http://{host}:{port}/get_blockchain_height"
+                        url = f"https://{host}:{port}/get_blockchain_height"
                         async with session.get(url) as response:
                             if response.status == 200:
                                 data = await response.json()
@@ -266,7 +268,7 @@ class Node:
             port = node.port
 
             async with aiohttp.ClientSession() as session:
-                url = f"http://{host}:{port}/get_block/{block_index}"
+                url = f"https://{host}:{port}/get_block/{block_index}"
                 async with session.get(url) as response:
                     if response.status == 200:
                         block_data = await response.json()
@@ -298,7 +300,7 @@ class Node:
             host = recipient.host
             port = recipient.port
             async with aiohttp.ClientSession() as session:
-                url = f"http://{host}:{port}/node_message"
+                url = f"https://{host}:{port}/node_message"
                 payload = {
                     'sender_id': self.node_id,
                     'message_type': message_type,
@@ -469,7 +471,7 @@ class Node:
                     failed_nodes.append(node_id)
                     return False
 
-                url = f"http://{node.host}:{node.port}/receive_block"
+                url = f"https://{node.host}:{node.port}/receive_block"
 
                 async with aiohttp.ClientSession(headers=headers) as session:
                     try:
@@ -550,7 +552,7 @@ class Node:
             
         try:
             async with aiohttp.ClientSession() as session:
-                url = f"http://{node.host}:{node.port}/health"
+                url = f"https://{node.host}:{node.port}/health"
                 async with session.get(url, timeout=2) as response:
                     return response.status == 200
         except:
@@ -745,20 +747,21 @@ PORT = int(os.environ.get('PORT', 5000))
 DOMAIN_PREFIX = os.environ.get('DOMAIN_PREFIX', '')
 
 
-current_node = Node(
-    NODE_ID,
-    {
-        i: {
-            'host': NODE_DOMAINS[i],
-            'port': PORT
-        }
-        for i in range(4) if i != NODE_ID
-    },
-    '0.0.0.0',
-    PORT
-)
+nodes = {}
+for i in range(4):
+    nodes[i] = Node(
+        node_id=i,
+        nodes={
+            j: {
+                'host': NODE_DOMAINS[j],
+                'port': 443  # Railway использует 443 для HTTPS
+            } for j in range(4) if j != i
+        },
+        host='0.0.0.0',
+        port=PORT
+    )
+current_node = nodes[NODE_ID]
 
-nodes = {NODE_ID: current_node}
 
 for node_id, node in nodes.items():
     node.nodes = {k: v for k, v in nodes.items() if k != node_id}
@@ -775,7 +778,7 @@ def check_node_availability_sync(node_id):
     if not node:
         return False
     try:
-        response = requests.get(f'http://{node.host}:{node.port}/health', timeout=2)
+        response = requests.get(f'https://{node.host}:{node.port}/health', timeout=2)
         return response.status_code == 200
     except:
         return False
@@ -1054,7 +1057,7 @@ def view_blockchain():
             try:
                 # Синхронная проверка доступности узла
                 response = requests.get(
-                    f'http://{node.host}:{node.port}/health',
+                    f'https://{node.host}:{node.port}/health',
                     timeout=2
                 )
                 if response.status_code == 200:
