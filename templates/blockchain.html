@@ -517,7 +517,7 @@
 
         {% if blocks %}
             {% for block in blocks %}
-                <div class="block-card {% if block.is_genesis %}genesis-block{% endif %}">
+                <div class="block-card {% if block.is_genesis %}genesis-block{% endif %}" data-block-index="{{ block.index }}">
                     <div class="block-header">
                         <h3 class="block-title">
                             Блок #{{ block.index }}
@@ -526,15 +526,13 @@
                                 <span class="badge badge-genesis">Генезис-блок</span>
                             {% endif %}
 
-                            {% if block.confirmations >= (block.total_nodes // 2 + 1) %}
-                                <span class="badge badge-success">Подтвержден ({{ block.confirmations }}/{{ block.total_nodes }})</span>
-                            {% else %}
-                                <span class="badge badge-warning">Ожидает подтверждения ({{ block.confirmations }}/{{ block.total_nodes }})</span>
-                            {% endif %}
-
-                            <span class="badge badge-light ml-2">
-                                <i class="fas fa-check-circle mr-1"></i>
-                                Подтверждений: <span id="confirmations-{{ block.index }}">{{ block.confirmations }}/{{ block.total_nodes }}</span>
+                            <span class="badge block-status {% if block.confirmations >= (block.total_nodes // 2 + 1) %}badge-success{% else %}badge-warning{% endif %}">
+                                {% if block.confirmations >= (block.total_nodes // 2 + 1) %}
+                                    Подтвержден
+                                {% else %}
+                                    Ожидает подтверждения
+                                {% endif %}
+                                (<span class="confirmations-count">{{ block.confirmations }}/{{ block.total_nodes }}</span>)
                             </span>
                         </h3>
                         <div>
@@ -801,26 +799,99 @@
             }
         });
 
-        // Показать полный хэш при клике
-        document.querySelectorAll('.hash-display').forEach(el => {
-            el.addEventListener('click', function() {
-                const fullHash = this.nextElementSibling;
-                if (fullHash.style.display === 'block') {
-                    fullHash.style.display = 'none';
-                } else {
-                    fullHash.style.display = 'block';
-                }
-            });
-        });
+        // Функция для показа деталей блока
+        function showBlockDetails(blockIndex) {
+            fetch(`/get_block_details/${blockIndex}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        alert(data.error);
+                        return;
+                    }
 
-        // Копирование в буфер обмена
-        function copyToClipboard(text) {
-            navigator.clipboard.writeText(text).then(function() {
-                alert('Скопировано в буфер обмена!');
-            }, function(err) {
-                console.error('Ошибка копирования: ', err);
-            });
+                    // Заполняем модальное окно данными
+                    document.getElementById('block-details-id').textContent = data.index;
+                    document.getElementById('block-details-hash').textContent = data.hash;
+                    document.getElementById('block-details-prev-hash').textContent = data.previous_hash;
+                    document.getElementById('block-details-node').textContent = `Узел ${data.node_id}`;
+                    document.getElementById('block-details-time').textContent = data.timestamp;
+                    document.getElementById('block-details-tx-count').textContent = data.tx_count;
+                    document.getElementById('block-details-confirmations').textContent = `${data.confirmations}/${data.total_nodes}`;
+
+                    // Заполняем подтвердившие узлы
+                    const nodesContainer = document.getElementById('confirming-nodes');
+                    nodesContainer.innerHTML = '';
+                    data.confirming_nodes.forEach(nodeId => {
+                        nodesContainer.innerHTML += `
+                            <span class="badge node-badge node-${nodeId}">
+                                <i class="fas fa-server mr-1"></i>Узел ${nodeId}
+                            </span>
+                        `;
+                    });
+
+                    // Показываем модальное окно
+                    $('#blockDetailsModal').modal('show');
+                })
+                .catch(error => {
+                    console.error('Error fetching block details:', error);
+                    alert('Ошибка при загрузке деталей блока');
+                });
         }
+
+        // Функция для обновления статуса подтверждений
+        function updateConfirmations() {
+            fetch('/get_blockchain_height')
+                .then(response => response.json())
+                .then(data => {
+                    const height = data.height;
+                    if (height === -1) return;
+
+                    // Для каждого блока запрашиваем детали
+                    for (let i = 0; i <= height; i++) {
+                        fetch(`/get_block_details/${i}`)
+                            .then(response => response.json())
+                            .then(blockData => {
+                                if (!blockData.error) {
+                                    const blockElement = document.querySelector(`.block-card[data-block-index="${i}"]`);
+                                    if (blockElement) {
+                                        // Обновляем счетчик подтверждений
+                                        const confirmationsElement = blockElement.querySelector('.confirmations-count');
+                                        if (confirmationsElement) {
+                                            confirmationsElement.textContent = `${blockData.confirmations}/${blockData.total_nodes}`;
+                                        }
+
+                                        // Обновляем статус блока
+                                        const statusElement = blockElement.querySelector('.block-status');
+                                        if (statusElement) {
+                                            if (blockData.confirmations >= (blockData.total_nodes // 2 + 1)) {
+                                                statusElement.className = 'badge badge-success block-status';
+                                                statusElement.textContent = `Подтвержден (${blockData.confirmations}/${blockData.total_nodes})`;
+                                            } else {
+                                                statusElement.className = 'badge badge-warning block-status';
+                                                statusElement.textContent = `Ожидает (${blockData.confirmations}/${blockData.total_nodes})`;
+                                            }
+                                        }
+                                    }
+                                }
+                            });
+                    }
+                });
+        }
+
+        // Обновляем каждые 3 секунды
+        setInterval(updateConfirmations, 3000);
+
+        // Инициализация при загрузке
+        document.addEventListener('DOMContentLoaded', function() {
+            // Добавляем data-атрибуты для блоков
+            document.querySelectorAll('.block-card').forEach(block => {
+                const blockIndex = block.querySelector('.block-title').textContent.match(/#(\d+)/)[1];
+                block.setAttribute('data-block-index', blockIndex);
+            });
+
+            // Первое обновление
+            updateConfirmations();
+        });
 
         // Анимация шагов PBFT
         let currentStep = 1;
@@ -844,41 +915,6 @@
             }
         });
 
-        // Показать детали блока
-        function showBlockDetails(blockIndex) {
-            // Отправляем AJAX-запрос для получения актуальных данных
-            fetch(`/get_block_details/${blockIndex}`)
-                .then(response => response.json())
-                .then(data => {
-                    // Заполняем модальное окно реальными данными
-                    document.getElementById('block-details-id').textContent = data.index;
-                    document.getElementById('block-details-hash').textContent = data.hash;
-                    document.getElementById('block-details-prev-hash').textContent = data.previous_hash;
-                    document.getElementById('block-details-node').textContent = `Узел ${data.node_id}`;
-                    document.getElementById('block-details-time').textContent = data.timestamp;
-                    document.getElementById('block-details-tx-count').textContent = data.tx_count;
-                    document.getElementById('block-details-confirmations').textContent = `${data.confirmations}/${data.total_nodes}`;
-
-                    // Отображаем подтвердившие узлы
-                    const nodesContainer = document.getElementById('confirming-nodes');
-                    nodesContainer.innerHTML = '';
-                    data.confirming_nodes.forEach(nodeId => {
-                        nodesContainer.innerHTML += `
-                            <span class="badge node-badge node-${nodeId}">
-                                <i class="fas fa-server mr-1"></i>Узел ${nodeId}
-                            </span>
-                        `;
-                    });
-
-                    // Показываем модальное окно
-                    $('#blockDetailsModal').modal('show');
-                })
-                .catch(error => {
-                    console.error('Error fetching block details:', error);
-                    alert('Ошибка при загрузке деталей блока');
-                });
-        }
-
         // Автоматически запускаем анимацию PBFT при открытии модального окна
         $('#pbftModal').on('shown.bs.modal', function () {
             if (!interval) {
@@ -896,49 +932,6 @@
             steps.forEach(step => step.classList.remove('active'));
             currentStep = 1;
         });
-
-        // Функция для обновления статуса подтверждений
-        function updateConfirmations() {
-            // Получаем все блоки на странице
-            document.querySelectorAll('.block-card').forEach(blockElement => {
-                const blockIndex = blockElement.querySelector('.block-title').textContent.match(/#(\d+)/)[1];
-                
-                // Запрашиваем актуальные данные о блоке
-                fetch(`/get_block_details/${blockIndex}`)
-                    .then(response => response.json())
-                    .then(data => {
-                        if (!data.error) {
-                            // Обновляем счетчик подтверждений
-                            const confirmationsElement = document.getElementById(`confirmations-${blockIndex}`);
-                            if (confirmationsElement) {
-                                confirmationsElement.textContent = `${data.confirmations}/${data.total_nodes}`;
-                            }
-                            
-                            // Обновляем статус блока (подтвержден/ожидает)
-                            const statusBadge = blockElement.querySelector('.badge-warning, .badge-success');
-                            if (statusBadge) {
-                                if (data.confirmations >= (data.total_nodes // 2 + 1)) {
-                                    statusBadge.classList.remove('badge-warning');
-                                    statusBadge.classList.add('badge-success');
-                                    statusBadge.textContent = `Подтвержден (${data.confirmations}/${data.total_nodes})`;
-                                } else {
-                                    statusBadge.classList.remove('badge-success');
-                                    statusBadge.classList.add('badge-warning');
-                                    statusBadge.textContent = `Ожидает подтверждения (${data.confirmations}/${data.total_nodes})`;
-                                }
-                            }
-                        }
-                    })
-                    .catch(error => console.error('Error updating confirmations:', error));
-            });
-        }
-        
-        // Обновляем статус каждые 5 секунд
-        setInterval(updateConfirmations, 5000);
-        
-        // Вызываем сразу при загрузке страницы
-        document.addEventListener('DOMContentLoaded', updateConfirmations);
-        
     </script>
 </body>
 </html>
