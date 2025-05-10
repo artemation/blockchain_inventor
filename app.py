@@ -26,7 +26,11 @@ load_dotenv()
 
 app = Flask(__name__)
 
-CORS(app)
+CORS(app, resources={
+    r"/receive_block": {"origins": [f"https://{domain}" for domain in NODE_DOMAINS.values()]},
+    r"/node_message": {"origins": [f"https://{domain}" for domain in NODE_DOMAINS.values()]},
+    r"/health": {"origins": "*"}
+})
 app.logger.setLevel(logging.DEBUG)  # Убедитесь, что уровень логирования установлен на DEBUG
 
 file_handler = RotatingFileHandler('app.log', maxBytes=1024 * 1024, backupCount=5)
@@ -528,12 +532,19 @@ class Node:
         return confirmations, len(self.nodes)
 
     # Проверка доступности узла
-    async def check_node_availability(self, host, port):
+    async def check_node_availability(self, node_id):
+        """Проверка доступности узла по его ID"""
+        if node_id == self.node_id:
+            return True  # Текущий узел всегда доступен
+            
+        node = self.nodes.get(node_id)
+        if not node:
+            return False
+            
         try:
             async with aiohttp.ClientSession() as session:
-                url = f"http://{host}:{port}/health"  # Endpoint для проверки доступности
-                timeout = aiohttp.ClientTimeout(total=2)  # 2-секундный таймаут
-                async with session.get(url, timeout=timeout) as response:
+                url = f"http://{node.host}:{node.port}/health"
+                async with session.get(url, timeout=2) as response:
                     return response.status == 200
         except:
             return False
@@ -726,12 +737,19 @@ NODE_ID = int(os.environ.get('NODE_ID', 0))
 PORT = int(os.environ.get('PORT', 5000))
 DOMAIN_PREFIX = os.environ.get('DOMAIN_PREFIX', '')
 
+NODE_DOMAINS = {
+    0: os.environ.get('NODE0_DOMAIN', 'blockchaininventory0.up.railway.app'),
+    1: os.environ.get('NODE1_DOMAIN', 'blockchaininventory1.up.railway.app'),
+    2: os.environ.get('NODE2_DOMAIN', 'blockchaininventory2.up.railway.app'),
+    3: os.environ.get('NODE3_DOMAIN', 'blockchaininventory3.up.railway.app')
+}
+
 nodes = {
     NODE_ID: Node(
         NODE_ID,
         {
             i: {
-                'host': f'node{i}-your-app-name.up.railway.app' if not DOMAIN_PREFIX else f'{DOMAIN_PREFIX}-{i}.yourdomain.com',
+                'host': NODE_DOMAINS[i],
                 'port': PORT
             }
             for i in range(4) if i != NODE_ID
@@ -1825,28 +1843,18 @@ def get_item_info(item_id):
 
 @app.route('/nodes_status')
 @login_required
-def nodes_status():
+async def nodes_status():  # Сделайте функцию асинхронной
     nodes_info = []
     for node_id, node in nodes.items():
-        # Проверяем доступность узла
-        is_online = False
-        try:
-            # Для текущего узла (node_id=0) всегда возвращаем True
-            if node_id == 0:
-                is_online = True
-            else:
-                # Попробуем сделать запрос к узлу
-                response = requests.get(f'http://{node.host}:{node.port}/health', timeout=2)
-                is_online = response.status_code == 200
-        except:
-            is_online = False
-
+        # Используем асинхронную проверку доступности
+        is_online = await node.check_node_availability(node_id) if node_id != 0 else True
+        
         # Получаем количество блоков
         with app.app_context():
             block_count = BlockchainBlock.query.filter_by(node_id=node_id).count()
 
         nodes_info.append({
-            'node_id': node_id,  # Исправлено: используем 'node_id' вместо 'id'
+            'node_id': node_id,
             'host': node.host,
             'port': node.port,
             'is_online': is_online,
