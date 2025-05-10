@@ -531,7 +531,7 @@ class Node:
         )
 
         # Проверяем достижение консенсуса (2f + 1 подтверждений)
-        required_confirmations = (len(available_nodes) // 3 * 2 + 1  # 2f+1
+        required_confirmations = (len(available_nodes) // 3 * 2 + 1)  # 2f+1
         consensus_reached = confirmations >= required_confirmations
 
         if consensus_reached:
