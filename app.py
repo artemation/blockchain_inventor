@@ -745,20 +745,20 @@ PORT = int(os.environ.get('PORT', 5000))
 DOMAIN_PREFIX = os.environ.get('DOMAIN_PREFIX', '')
 
 
-nodes = {
-    NODE_ID: Node(
-        NODE_ID,
-        {
-            i: {
-                'host': NODE_DOMAINS[i],
-                'port': PORT
-            }
-            for i in range(4) if i != NODE_ID
-        },
-        '0.0.0.0',
-        PORT
-    )
-}
+current_node = Node(
+    NODE_ID,
+    {
+        i: {
+            'host': NODE_DOMAINS[i],
+            'port': PORT
+        }
+        for i in range(4) if i != NODE_ID
+    },
+    '0.0.0.0',
+    PORT
+)
+
+nodes = {NODE_ID: current_node}
 
 for node_id, node in nodes.items():
     node.nodes = {k: v for k, v in nodes.items() if k != node_id}
