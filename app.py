@@ -11,7 +11,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 from logging import Formatter, StreamHandler, DEBUG
 import json
-from sqlalchemy import text, select
+from sqlalchemy import text, select, func
 from flask_wtf.csrf import CSRFProtect
 import threading
 from datetime import datetime, timezone
@@ -1062,57 +1062,58 @@ def pprint_filter(data):
         return json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True)
     return str(data)
 
+def check_node_availability_sync(node_id):
+    """Синхронная проверка доступности узла"""
+    if node_id == NODE_ID:  # Текущий узел всегда доступен
+        return True
+    
+    try:
+        response = requests.get(
+            f'https://{nodes[node_id].host}/health',
+            timeout=2
+        )
+        return response.status_code == 200
+    except Exception:
+        return False
 
 @app.route('/blockchain')
 @login_required
 def view_blockchain():
     """Отображает всю цепочку блоков с информацией о подтверждениях"""
     try:
-        # 1. Получаем все блоки из БД, сортируем по индексу
-        blocks = BlockchainBlock.query.order_by(BlockchainBlock.index).all()
+        # 1. Получаем все блоки из БД, сгруппированные по индексу
+        blocks_query = db.session.query(
+            BlockchainBlock.index,
+            func.count(BlockchainBlock.id).label('confirmations'),
+            func.max(BlockchainBlock.timestamp).label('timestamp')
+        ).group_by(BlockchainBlock.index).order_by(BlockchainBlock.index).all()
 
-        # 2. Создаем словарь для подсчета подтверждений каждого блока
-        block_confirmations = {}
-        for block in blocks:
-            if block.index not in block_confirmations:
-                block_confirmations[block.index] = set()
-            block_confirmations[block.index].add(block.node_id)
-
-        # 3. Получаем список всех узлов и проверяем их доступность
-        available_nodes = []
-        for node_id in nodes:
-            if node_id == NODE_ID:  # Текущий узел всегда доступен
-                available_nodes.append(node_id)
-                continue
-            
-            try:
-                # Проверяем доступность узла
-                response = requests.get(
-                    f'https://{nodes[node_id].host}/health',
-                    timeout=2
-                )
-                if response.status_code == 200:
-                    available_nodes.append(node_id)
-            except:
-                continue  # Узел недоступен
-
-        # 4. Получаем справочные данные из базы
+        # 2. Получаем справочные данные из базы
         warehouses = {w.СкладID: w.Название for w in Склады.query.all()}
         documents = {d.ДокументID: d.Тип_документа for d in Тип_документа.query.all()}
         products = {p.ТоварID: p.Наименование for p in Товары.query.all()}
         units = {u.Единица_ИзмеренияID: u.Единица_Измерения for u in Единица_измерения.query.all()}
 
-        # 5. Формируем данные для отображения
+        # 3. Формируем данные для отображения
         formatted_blocks = []
-        for block in blocks:
+        for block in blocks_query:
+            # Получаем основной блок (первый с этим индексом)
+            main_block = BlockchainBlock.query.filter_by(
+                index=block.index
+            ).order_by(BlockchainBlock.node_id).first()
+
+            if not main_block:
+                continue
+
             try:
                 # Загружаем транзакции из JSON
-                transactions = json.loads(block.transactions)
+                transactions = json.loads(main_block.transactions)
 
-                # Получаем подтверждения для этого блока
-                confirmations = len(block_confirmations.get(block.index, set()))
-                total_nodes = len(nodes)
-                confirming_nodes = list(block_confirmations.get(block.index, []))
+                # Получаем список узлов, подтвердивших этот блок
+                confirming_blocks = BlockchainBlock.query.filter_by(
+                    index=block.index
+                ).all()
+                confirming_nodes = [b.node_id for b in confirming_blocks]
 
                 # Обогащаем данные транзакций
                 enriched_transactions = []
@@ -1121,11 +1122,11 @@ def view_blockchain():
                         if 'message' not in tx:  # Не генезис-блок
                             enriched_tx = {
                                 **tx,
-                                'sender_name': warehouses.get(tx.get('СкладОтправительID'), 'Неизвестно'),
-                                'receiver_name': warehouses.get(tx.get('СкладПолучательID'), 'Неизвестно'),
-                                'document_name': documents.get(tx.get('ДокументID'), 'Неизвестно'),
-                                'product_name': products.get(tx.get('ТоварID'), 'Неизвестно'),
-                                'unit_name': units.get(tx.get('Единица_ИзмеренияID'), 'Неизвестно')
+                                'sender_name': warehouses.get(tx.get('СкладОтправительID'),
+                                'receiver_name': warehouses.get(tx.get('СкладПолучательID')),
+                                'document_name': documents.get(tx.get('ДокументID')),
+                                'product_name': products.get(tx.get('ТоварID')),
+                                'unit_name': units.get(tx.get('Единица_ИзмеренияID'))
                             }
                             enriched_transactions.append(enriched_tx)
                         else:
@@ -1134,19 +1135,20 @@ def view_blockchain():
                 # Формируем блок с обогащенными данными
                 formatted_blocks.append({
                     'index': block.index,
-                    'timestamp': block.timestamp,
+                    'timestamp': main_block.timestamp,
                     'transactions': enriched_transactions,
-                    'previous_hash': block.previous_hash,
-                    'hash': block.hash,
-                    'node_id': block.node_id,
+                    'previous_hash': main_block.previous_hash,
+                    'hash': main_block.hash,
+                    'node_id': main_block.node_id,
                     'is_genesis': block.index == 0,
-                    'confirmations': confirmations,
-                    'total_nodes': total_nodes,
-                    'confirming_nodes': confirming_nodes
+                    'confirmations': block.confirmations,
+                    'total_nodes': len(nodes),
+                    'confirming_nodes': confirming_nodes,
+                    'creator_node': main_block.node_id
                 })
 
             except json.JSONDecodeError as e:
-                app.logger.error(f"Error decoding transactions for block {block.id}: {e}")
+                app.logger.error(f"Error decoding transactions for block {block.index}: {e}")
                 continue
 
         return render_template('blockchain.html', blocks=formatted_blocks)
@@ -1907,32 +1909,45 @@ async def nodes_status():
 @app.route('/get_block_details/<int:block_index>')
 def get_block_details(block_index):
     try:
-        # Получаем основной блок
-        block = BlockchainBlock.query.filter_by(index=block_index).first()
-        if not block:
+        # Получаем все блоки с этим индексом (подтверждения от разных узлов)
+        blocks = BlockchainBlock.query.filter_by(index=block_index).all()
+        if not blocks:
             return jsonify({'error': 'Block not found'}), 404
 
-        # Получаем все подтверждения этого блока
-        confirming_blocks = BlockchainBlock.query.filter_by(index=block_index).all()
-        confirming_nodes = [b.node_id for b in confirming_blocks]
-
-        # Получаем список доступных узлов
+        # Основной блок (первый в списке)
+        main_block = blocks[0]
+        
+        # Узлы, подтвердившие этот блок
+        confirming_nodes = [block.node_id for block in blocks]
+        
+        # Проверяем доступность узлов
         available_nodes = []
         for node_id in nodes:
-            if node_id != 0:  # Текущий узел (0) всегда доступен
-                if check_node_availability_sync(node_id):
+            if node_id == NODE_ID:  # Текущий узел всегда доступен
+                available_nodes.append(node_id)
+                continue
+            
+            try:
+                response = requests.get(
+                    f'https://{nodes[node_id].host}/health',
+                    timeout=2
+                )
+                if response.status_code == 200:
                     available_nodes.append(node_id)
+            except:
+                continue
 
         return jsonify({
-            'index': block.index,
-            'timestamp': block.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
-            'hash': block.hash,
-            'previous_hash': block.previous_hash,
-            'node_id': block.node_id,
-            'tx_count': len(json.loads(block.transactions)),
+            'index': main_block.index,
+            'timestamp': main_block.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+            'hash': main_block.hash,
+            'previous_hash': main_block.previous_hash,
+            'node_id': main_block.node_id,
+            'tx_count': len(json.loads(main_block.transactions)),
             'confirmations': len(confirming_nodes),
             'total_nodes': len(nodes),
-            'confirming_nodes': confirming_nodes
+            'confirming_nodes': confirming_nodes,
+            'available_nodes': available_nodes
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
