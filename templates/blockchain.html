@@ -30,7 +30,7 @@
             line-height: 1.6;
         }
 
-        /* Стили для боковой панели (такие же как в index.html) */
+        /* Стили для боковой панели */
         .sidebar {
             width: var(--sidebar-width);
             background: linear-gradient(312deg, var(--dark-color), #2a2ab1);
@@ -252,6 +252,7 @@
         .node-0 { background-color: var(--primary-color); color: white; }
         .node-1 { background-color: var(--success-color); color: white; }
         .node-2 { background-color: var(--danger-color); color: white; }
+        .node-3 { background-color: var(--warning-color); color: white; }
 
         .badge-genesis {
             background-color: var(--warning-color);
@@ -311,6 +312,84 @@
             font-size: 0.85rem;
         }
 
+        /* Стили для визуализации PBFT */
+        .pbft-visualization {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .pbft-steps {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .step {
+            display: flex;
+            align-items: center;
+            padding: 10px 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            transition: all 0.3s;
+        }
+
+        .step.active {
+            background: var(--primary-color);
+            color: white;
+        }
+
+        .step-number {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 25px;
+            height: 25px;
+            background: white;
+            color: var(--dark-color);
+            border-radius: 50%;
+            margin-right: 10px;
+            font-weight: bold;
+        }
+
+        .step.active .step-number {
+            background: var(--dark-color);
+            color: white;
+        }
+
+        .step-text {
+            flex-grow: 1;
+        }
+
+        .mermaid {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin-bottom: 20px;
+        }
+
+        /* Стили для деталей блока */
+        .block-details-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+        }
+
+        .confirming-nodes {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .modal-body .hash-display {
+            word-break: break-all;
+            white-space: normal;
+            font-family: monospace;
+            background: #f5f5f5;
+            padding: 8px;
+            border-radius: 4px;
+        }
+
         /* Адаптивность */
         @media (max-width: 992px) {
             .sidebar {
@@ -339,6 +418,10 @@
                 margin-left: 80px;
                 width: calc(100% - 80px);
             }
+
+            .block-details-grid {
+                grid-template-columns: 1fr;
+            }
         }
 
         @media (max-width: 768px) {
@@ -354,7 +437,7 @@
     </style>
 </head>
 <body>
-    <!-- Боковая панель (такая же как в index.html) -->
+    <!-- Боковая панель -->
     <div class="sidebar">
         <div class="logo-container">
             <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Логотип" class="logo">
@@ -372,6 +455,12 @@
                         <a class="nav-link active" href="{{ url_for('view_blockchain') }}">
                             <i class="fas fa-link"></i>
                             <span>Блокчейн</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('nodes_status') }}">
+                            <i class="fas fa-server"></i>
+                            <span>Статус узлов</span>
                         </a>
                     </li>
                     <li class="nav-item">
@@ -407,6 +496,11 @@
             </div>
         </div>
 
+        <!-- Кнопка для визуализации PBFT -->
+        <button class="btn btn-info mb-3" data-toggle="modal" data-target="#pbftModal">
+            <i class="fas fa-project-diagram mr-2"></i>Как работает PBFT
+        </button>
+
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
@@ -431,10 +525,24 @@
                             {% if block.is_genesis %}
                                 <span class="badge badge-genesis">Генезис-блок</span>
                             {% endif %}
+
+                            {% if block.confirmations >= (block.total_nodes // 2 + 1) %}
+                                <span class="badge badge-success">Подтвержден</span>
+                            {% else %}
+                                <span class="badge badge-warning">Ожидает подтверждения</span>
+                            {% endif %}
+
+                            <span class="badge badge-light ml-2">
+                                <i class="fas fa-check-circle mr-1"></i>
+                                Подтверждений: <span id="confirmations-{{ block.index }}">{{ block.confirmations }}/{{ block.total_nodes }}</span>
+                            </span>
                         </h3>
                         <div>
                             <button class="btn btn-sm btn-outline-secondary" onclick="navigator.clipboard.writeText('{{ block.hash }}')">
                                 <i class="fas fa-copy mr-1"></i>Копировать хэш
+                            </button>
+                            <button class="btn btn-sm btn-outline-info ml-2" onclick="showBlockDetails({{ block.index }})">
+                                <i class="fas fa-info-circle mr-1"></i>Подробнее
                             </button>
                         </div>
                     </div>
@@ -549,10 +657,150 @@
         {% endif %}
     </div>
 
+    <!-- Модальное окно для визуализации PBFT -->
+    <div class="modal fade" id="pbftModal" tabindex="-1" role="dialog" aria-labelledby="pbftModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="pbftModalLabel">
+                        <i class="fas fa-project-diagram mr-2"></i>Процесс консенсуса PBFT
+                    </h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div class="pbft-visualization">
+                        <div class="mermaid">
+                            sequenceDiagram
+                                participant Client
+                                participant Leader
+                                participant Replica1
+                                participant Replica2
+                                participant Replica3
+
+                                Client->>Leader: Request
+                                Leader->>Replica1: Pre-prepare
+                                Leader->>Replica2: Pre-prepare
+                                Leader->>Replica3: Pre-prepare
+
+                                Replica1->>Replica2: Prepare
+                                Replica1->>Replica3: Prepare
+                                Replica2->>Replica1: Prepare
+                                Replica2->>Replica3: Prepare
+                                Replica3->>Replica1: Prepare
+                                Replica3->>Replica2: Prepare
+
+                                Replica1->>Replica2: Commit
+                                Replica1->>Replica3: Commit
+                                Replica2->>Replica1: Commit
+                                Replica2->>Replica3: Commit
+                                Replica3->>Replica1: Commit
+                                Replica3->>Replica2: Commit
+
+                                Replica1->>Client: Reply
+                                Replica2->>Client: Reply
+                                Replica3->>Client: Reply
+                        </div>
+                        <div class="pbft-steps mt-4">
+                            <div class="step active" data-step="1">
+                                <span class="step-number">1</span>
+                                <span class="step-text">Клиент отправляет запрос лидеру</span>
+                            </div>
+                            <div class="step" data-step="2">
+                                <span class="step-number">2</span>
+                                <span class="step-text">Лидер рассылает Pre-prepare</span>
+                            </div>
+                            <div class="step" data-step="3">
+                                <span class="step-number">3</span>
+                                <span class="step-text">Реплики обмениваются Prepare</span>
+                            </div>
+                            <div class="step" data-step="4">
+                                <span class="step-number">4</span>
+                                <span class="step-text">Реплики обмениваются Commit</span>
+                            </div>
+                            <div class="step" data-step="5">
+                                <span class="step-number">5</span>
+                                <span class="step-text">Клиент получает ответы</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Закрыть</button>
+                    <button type="button" class="btn btn-primary" id="animatePbft">Анимировать</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно для деталей блока -->
+    <div class="modal fade" id="blockDetailsModal" tabindex="-1" role="dialog" aria-labelledby="blockDetailsModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="blockDetailsModalLabel">
+                        <i class="fas fa-cube mr-2"></i>Детали блока #<span id="block-details-id"></span>
+                    </h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div class="block-details-grid">
+                        <div class="detail-item">
+                            <div class="detail-label">Хэш блока</div>
+                            <div class="detail-value hash-display" id="block-details-hash" style="word-break: break-all;"></div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Предыдущий хэш</div>
+                            <div class="detail-value hash-display" id="block-details-prev-hash" style="word-break: break-all;"></div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Узел-создатель</div>
+                            <div class="detail-value" id="block-details-node"></div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Время создания</div>
+                            <div class="detail-value" id="block-details-time"></div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Количество транзакций</div>
+                            <div class="detail-value" id="block-details-tx-count"></div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Подтверждений</div>
+                            <div class="detail-value" id="block-details-confirmations"></div>
+                        </div>
+                    </div>
+                    <div class="mt-3">
+                        <h5><i class="fas fa-check-circle mr-2"></i>Подтвердившие узлы</h5>
+                        <div id="confirming-nodes" class="confirming-nodes"></div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Закрыть</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.3/dist/umd/popper.min.js"></script>
     <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
     <script>
+        // Инициализация Mermaid
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            fontFamily: 'inherit',
+            flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true
+            }
+        });
+
         // Показать полный хэш при клике
         document.querySelectorAll('.hash-display').forEach(el => {
             el.addEventListener('click', function() {
@@ -573,6 +821,81 @@
                 console.error('Ошибка копирования: ', err);
             });
         }
+
+        // Анимация шагов PBFT
+        let currentStep = 1;
+        const steps = document.querySelectorAll('.pbft-steps .step');
+        let interval = null;
+
+        function animatePbftSteps() {
+            steps.forEach(step => step.classList.remove('active'));
+            steps[currentStep - 1].classList.add('active');
+            currentStep = currentStep < steps.length ? currentStep + 1 : 1;
+        }
+
+        document.getElementById('animatePbft').addEventListener('click', function() {
+            if (interval) {
+                clearInterval(interval);
+                interval = null;
+                this.textContent = 'Анимировать';
+            } else {
+                interval = setInterval(animatePbftSteps, 1500);
+                this.textContent = 'Остановить';
+            }
+        });
+
+        // Показать детали блока
+        function showBlockDetails(blockIndex) {
+            // Отправляем AJAX-запрос для получения актуальных данных
+            fetch(`/get_block_details/${blockIndex}`)
+                .then(response => response.json())
+                .then(data => {
+                    // Заполняем модальное окно реальными данными
+                    document.getElementById('block-details-id').textContent = data.index;
+                    document.getElementById('block-details-hash').textContent = data.hash;
+                    document.getElementById('block-details-prev-hash').textContent = data.previous_hash;
+                    document.getElementById('block-details-node').textContent = `Узел ${data.node_id}`;
+                    document.getElementById('block-details-time').textContent = data.timestamp;
+                    document.getElementById('block-details-tx-count').textContent = data.tx_count;
+                    document.getElementById('block-details-confirmations').textContent = `${data.confirmations}/${data.total_nodes}`;
+
+                    // Отображаем подтвердившие узлы
+                    const nodesContainer = document.getElementById('confirming-nodes');
+                    nodesContainer.innerHTML = '';
+                    data.confirming_nodes.forEach(nodeId => {
+                        nodesContainer.innerHTML += `
+                            <span class="badge node-badge node-${nodeId}">
+                                <i class="fas fa-server mr-1"></i>Узел ${nodeId}
+                            </span>
+                        `;
+                    });
+
+                    // Показываем модальное окно
+                    $('#blockDetailsModal').modal('show');
+                })
+                .catch(error => {
+                    console.error('Error fetching block details:', error);
+                    alert('Ошибка при загрузке деталей блока');
+                });
+        }
+
+        // Автоматически запускаем анимацию PBFT при открытии модального окна
+        $('#pbftModal').on('shown.bs.modal', function () {
+            if (!interval) {
+                interval = setInterval(animatePbftSteps, 1500);
+                document.getElementById('animatePbft').textContent = 'Остановить';
+            }
+        });
+
+        // Останавливаем анимацию при закрытии модального окна
+        $('#pbftModal').on('hidden.bs.modal', function () {
+            if (interval) {
+                clearInterval(interval);
+                interval = null;
+            }
+            steps.forEach(step => step.classList.remove('active'));
+            currentStep = 1;
+        });
     </script>
 </body>
 </html>
