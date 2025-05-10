@@ -507,7 +507,7 @@ class Node:
         # Проверяем доступность всех узлов перед рассылкой
         available_nodes = []
         for node_id in self.nodes:
-            if await check_node_availability(node_id):
+            if await self.check_node_availability(node_id):
                 available_nodes.append(node_id)
 
         # Рассылаем только доступным узлам
