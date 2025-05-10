@@ -26,6 +26,13 @@ load_dotenv()
 
 app = Flask(__name__)
 
+NODE_DOMAINS = {
+    0: os.environ.get('NODE0_DOMAIN', 'blockchaininventory0.up.railway.app'),
+    1: os.environ.get('NODE1_DOMAIN', 'blockchaininventory1.up.railway.app'),
+    2: os.environ.get('NODE2_DOMAIN', 'blockchaininventory2.up.railway.app'),
+    3: os.environ.get('NODE3_DOMAIN', 'blockchaininventory3.up.railway.app')
+}
+
 CORS(app, resources={
     r"/receive_block": {"origins": [f"https://{domain}" for domain in NODE_DOMAINS.values()]},
     r"/node_message": {"origins": [f"https://{domain}" for domain in NODE_DOMAINS.values()]},
@@ -737,12 +744,6 @@ NODE_ID = int(os.environ.get('NODE_ID', 0))
 PORT = int(os.environ.get('PORT', 5000))
 DOMAIN_PREFIX = os.environ.get('DOMAIN_PREFIX', '')
 
-NODE_DOMAINS = {
-    0: os.environ.get('NODE0_DOMAIN', 'blockchaininventory0.up.railway.app'),
-    1: os.environ.get('NODE1_DOMAIN', 'blockchaininventory1.up.railway.app'),
-    2: os.environ.get('NODE2_DOMAIN', 'blockchaininventory2.up.railway.app'),
-    3: os.environ.get('NODE3_DOMAIN', 'blockchaininventory3.up.railway.app')
-}
 
 nodes = {
     NODE_ID: Node(
