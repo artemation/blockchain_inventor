@@ -1899,6 +1899,8 @@ def get_block_details(block_index):
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
+    print(f"Запуск узла {NODE_ID} на порту {PORT}")
+    print(f"Известные узлы: {nodes[NODE_ID].nodes}"
     import sys
 
     # Параметры узла по умолчанию
