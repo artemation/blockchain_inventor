@@ -527,9 +527,9 @@
                             {% endif %}
 
                             {% if block.confirmations >= (block.total_nodes // 2 + 1) %}
-                                <span class="badge badge-success">Подтвержден</span>
+                                <span class="badge badge-success">Подтвержден ({{ block.confirmations }}/{{ block.total_nodes }})</span>
                             {% else %}
-                                <span class="badge badge-warning">Ожидает подтверждения</span>
+                                <span class="badge badge-warning">Ожидает подтверждения ({{ block.confirmations }}/{{ block.total_nodes }})</span>
                             {% endif %}
 
                             <span class="badge badge-light ml-2">
