@@ -896,6 +896,49 @@
             steps.forEach(step => step.classList.remove('active'));
             currentStep = 1;
         });
+
+        // Функция для обновления статуса подтверждений
+        function updateConfirmations() {
+            // Получаем все блоки на странице
+            document.querySelectorAll('.block-card').forEach(blockElement => {
+                const blockIndex = blockElement.querySelector('.block-title').textContent.match(/#(\d+)/)[1];
+                
+                // Запрашиваем актуальные данные о блоке
+                fetch(`/get_block_details/${blockIndex}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (!data.error) {
+                            // Обновляем счетчик подтверждений
+                            const confirmationsElement = document.getElementById(`confirmations-${blockIndex}`);
+                            if (confirmationsElement) {
+                                confirmationsElement.textContent = `${data.confirmations}/${data.total_nodes}`;
+                            }
+                            
+                            // Обновляем статус блока (подтвержден/ожидает)
+                            const statusBadge = blockElement.querySelector('.badge-warning, .badge-success');
+                            if (statusBadge) {
+                                if (data.confirmations >= (data.total_nodes // 2 + 1)) {
+                                    statusBadge.classList.remove('badge-warning');
+                                    statusBadge.classList.add('badge-success');
+                                    statusBadge.textContent = `Подтвержден (${data.confirmations}/${data.total_nodes})`;
+                                } else {
+                                    statusBadge.classList.remove('badge-success');
+                                    statusBadge.classList.add('badge-warning');
+                                    statusBadge.textContent = `Ожидает подтверждения (${data.confirmations}/${data.total_nodes})`;
+                                }
+                            }
+                        }
+                    })
+                    .catch(error => console.error('Error updating confirmations:', error));
+            });
+        }
+        
+        // Обновляем статус каждые 5 секунд
+        setInterval(updateConfirmations, 5000);
+        
+        // Вызываем сразу при загрузке страницы
+        document.addEventListener('DOMContentLoaded', updateConfirmations);
+        
     </script>
 </body>
 </html>
