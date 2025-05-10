@@ -7,7 +7,69 @@
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
+        .step {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            flex: 1;
+            position: relative;
+        }
+
+        .step-icon {
+            width: 40px;
+            height: 40px;
+            background: #f0f0f0;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 8px;
+            color: #666;
+        }
+
+        .step.active .step-icon {
+            background: var(--primary-color);
+            color: white;
+        }
+
+        .step.completed .step-icon {
+            background: var(--success-color);
+            color: white;
+        }
+
+        .step-text {
+            font-size: 0.8rem;
+            text-align: center;
+            color: #666;
+        }
+
+        .step.active .step-text {
+            color: var(--primary-color);
+            font-weight: bold;
+        }
+
+        .step.completed .step-text {
+            color: var(--success-color);
+        }
+
+        .step-line {
+            position: absolute;
+            top: 20px;
+            left: 70%;
+            width: 30%;
+            height: 2px;
+            background: #f0f0f0;
+            z-index: -1;
+        }
+
+        .step.completed .step-line {
+            background: var(--success-color);
+        }
+
+
+
         :root {
             --primary-color: #4361ee;
             --secondary-color: #3f37c9;
@@ -55,12 +117,14 @@
             width: 80%;
             max-width: 180px;
             height: auto;
-
+            border-radius: 0;
+            padding: 0;
+            background: none;
+            transition: all 0.3s;
         }
 
         .sidebar .logo:hover {
             transform: scale(1.05);
-            /* Меняем свечение на более подходящее для квадратного лого */
             box-shadow: 0 0 10px rgba(67, 97, 238, 0.7);
         }
 
@@ -531,6 +595,94 @@
         .img-product:hover {
             transform: scale(1.03);
         }
+
+        /* Стили для анимации транзакции PBFT */
+        .pbft-animation-steps {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+
+        .step {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            flex: 1;
+            position: relative;
+        }
+
+        .step-icon {
+            width: 40px;
+            height: 40px;
+            background: #f0f0f0;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 8px;
+            color: #666;
+        }
+
+        .step.active .step-icon {
+            background: var(--primary-color);
+            color: white;
+        }
+
+        .step.completed .step-icon {
+            background: var(--success-color);
+            color: white;
+        }
+
+        .step-text {
+            font-size: 0.8rem;
+            text-align: center;
+            color: #666;
+        }
+
+        .step.active .step-text {
+            color: var(--primary-color);
+            font-weight: bold;
+        }
+
+        .step.completed .step-text {
+            color: var(--success-color);
+        }
+
+        .step-line {
+            position: absolute;
+            top: 20px;
+            left: 70%;
+            width: 30%;
+            height: 2px;
+            background: #f0f0f0;
+            z-index: -1;
+        }
+
+        .step.completed .step-line {
+            background: var(--success-color);
+        }
+
+        /* Анимация подтверждения транзакции */
+        #transactionAnimation {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.7);
+            z-index: 2000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #transactionAnimation > div {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            max-width: 600px;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
@@ -552,6 +704,12 @@
                         <a class="nav-link" href="{{ url_for('view_blockchain') }}">
                             <i class="fas fa-link"></i>
                             <span>Блокчейн</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('nodes_status') }}">
+                            <i class="fas fa-server"></i>
+                            <span>Статус узлов</span>
                         </a>
                     </li>
                     <li class="nav-item">
@@ -819,14 +977,94 @@
     <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/i18n/ru.js"></script>
 
+    <!-- Анимация подтверждения транзакции -->
+    <div id="transactionAnimation" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 2000; justify-content: center; align-items: center;">
+        <div style="background: white; padding: 30px; border-radius: 15px; max-width: 600px; text-align: center;">
+            <h3 class="mb-4"><i class="fas fa-cog fa-spin mr-2"></i>Подтверждение транзакции</h3>
+
+            <div class="pbft-animation-steps">
+                <div class="step" data-step="1">
+                    <div class="step-icon"><i class="fas fa-paper-plane"></i></div>
+                    <div class="step-text">Отправка запроса</div>
+                    <div class="step-line"></div>
+                </div>
+                <div class="step" data-step="2">
+                    <div class="step-icon"><i class="fas fa-bullhorn"></i></div>
+                    <div class="step-text">Pre-prepare</div>
+                    <div class="step-line"></div>
+                </div>
+                <div class="step" data-step="3">
+                    <div class="step-icon"><i class="fas fa-check-double"></i></div>
+                    <div class="step-text">Prepare</div>
+                    <div class="step-line"></div>
+                </div>
+                <div class="step" data-step="4">
+                    <div class="step-icon"><i class="fas fa-lock"></i></div>
+                    <div class="step-text">Commit</div>
+                    <div class="step-line"></div>
+                </div>
+                <div class="step" data-step="5">
+                    <div class="step-icon"><i class="fas fa-check-circle"></i></div>
+                    <div class="step-text">Подтверждено</div>
+                </div>
+            </div>
+
+            <div class="progress mt-4">
+                <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
+            </div>
+
+            <div class="mt-3" id="tx-hash-display"></div>
+        </div>
+    </div>
+
     <script>
     // Глобальные функции
+    function showTransactionAnimation(txHash) {
+        const animation = document.getElementById('transactionAnimation');
+        const steps = document.querySelectorAll('.pbft-animation-steps .step');
+        const progressBar = document.querySelector('.progress-bar');
+        const txHashDisplay = document.getElementById('tx-hash-display');
+
+        // Показываем анимацию
+        animation.style.display = 'flex';
+        txHashDisplay.innerHTML = `<small>Хэш транзакции: <code>${txHash}</code></small>`;
+
+        let currentStep = 0;
+        const totalSteps = steps.length;
+
+        const animateStep = () => {
+            if (currentStep > 0) {
+                steps[currentStep - 1].classList.remove('active');
+                steps[currentStep - 1].classList.add('completed');
+            }
+
+            if (currentStep < totalSteps) {
+                steps[currentStep].classList.add('active');
+                const progress = ((currentStep + 1) / totalSteps) * 100;
+                progressBar.style.width = `${progress}%`;
+                currentStep++;
+                setTimeout(animateStep, 1000 + Math.random() * 1000);
+            } else {
+                // Завершение анимации
+                setTimeout(() => {
+                    animation.style.display = 'none';
+                    steps.forEach(step => {
+                        step.classList.remove('active', 'completed');
+                    });
+                    progressBar.style.width = '0%';
+                }, 2000);
+            }
+        };
+
+        animateStep();
+    }
+
     function showRecordDetails(recordId) {
         $('#detailsModal').modal('show');
         $('#detailsContent').html(`
             <div class="text-center py-3">
                 <div class="spinner-border text-primary" role="status">
-                    <span class="sr-only">Загрузка...</span>
+                    <span aria-hidden="true"></span>
                 </div>
                 <p class="mt-3">Загрузка деталей записи...</p>
             </div>
@@ -1320,6 +1558,7 @@
                 },
                 success: function(response) {
                     if (response && response.success) {
+                        showTransactionAnimation(response.transactionHash || 'abc123...def456');
                         showAlert('Запись успешно добавлена', 'success');
                         getLastRecord();
                         $('#transactionForm')[0].reset();
