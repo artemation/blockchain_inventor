@@ -781,7 +781,7 @@ with app.app_context():
 def serialize_data(data):
     return json.dumps(data, ensure_ascii=False, sort_keys=True)
 
-def check_node_availability_sync(node_id):
+async def check_node_availability_sync(node_id):
     """Синхронная проверка доступности узла"""
     node = nodes.get(node_id)
     if not node:
