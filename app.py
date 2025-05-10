@@ -1122,7 +1122,7 @@ def view_blockchain():
                         if 'message' not in tx:  # Не генезис-блок
                             enriched_tx = {
                                 **tx,
-                                'sender_name': warehouses.get(tx.get('СкладОтправительID'),
+                                'sender_name': warehouses.get(tx.get('СкладОтправительID')),
                                 'receiver_name': warehouses.get(tx.get('СкладПолучательID')),
                                 'document_name': documents.get(tx.get('ДокументID')),
                                 'product_name': products.get(tx.get('ТоварID')),
