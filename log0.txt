@@ -1,65 +1,75 @@
 Starting Container
 
-[2025-05-11 17:16:30 +0000] [1] [INFO] Starting gunicorn 21.2.0
+[2025-05-11 17:28:14 +0000] [1] [INFO] Starting gunicorn 21.2.0
 
-[2025-05-11 17:16:30 +0000] [1] [INFO] Listening at: http://0.0.0.0:8080 (1)
+[2025-05-11 17:28:14 +0000] [1] [INFO] Listening at: http://0.0.0.0:8080 (1)
 
-[2025-05-11 17:16:30 +0000] [1] [INFO] Using worker: gthread
+[2025-05-11 17:28:14 +0000] [1] [INFO] Using worker: gthread
 
-[2025-05-11 17:16:30 +0000] [4] [INFO] Booting worker with pid: 4
+[2025-05-11 17:28:14 +0000] [4] [INFO] Booting worker with pid: 4
 
-[2025-05-11 17:16:30 +0000] [5] [INFO] Booting worker with pid: 5
+[2025-05-11 17:28:15 +0000] [5] [INFO] Booting worker with pid: 5
 
-[2025-05-11 17:16:30 +0000] [6] [INFO] Booting worker with pid: 6
+[2025-05-11 17:28:15 +0000] [6] [INFO] Booting worker with pid: 6
 
-[2025-05-11 17:16:30 +0000] [7] [INFO] Booting worker with pid: 7
+[2025-05-11 17:28:15 +0000] [7] [INFO] Booting worker with pid: 7
 
-[2025-05-11 17:16:31,440] DEBUG in app: This is a test log message at the beginning
+[2025-05-11 17:28:15,613] DEBUG in app: This is a test log message at the beginning
 
-[2025-05-11 17:16:31,654] DEBUG in app: This is a test log message at the beginning
+[2025-05-11 17:28:15,734] DEBUG in app: This is a test log message at the beginning
 
-[2025-05-11 17:16:31,743] DEBUG in app: This is a test log message at the beginning
+[2025-05-11 17:28:15,738] DEBUG in app: This is a test log message at the beginning
 
-[2025-05-11 17:16:31,816] DEBUG in app: This is a test log message at the beginning
+[2025-05-11 17:28:15,866] DEBUG in app: This is a test log message at the beginning
 
-[2025-05-11 17:17:50,840] ERROR in app: Exception on /receive_block [POST]
+[2025-05-11 17:31:01,313] DEBUG in app: Entering index function
 
-Traceback (most recent call last):
+[2025-05-11 17:31:01,315] INFO in app: Соединение с базой данных установлено!
 
-  File "/opt/venv/lib/python3.12/site-packages/flask/app.py", line 2190, in wsgi_app
+[2025-05-11 17:31:01,328] DEBUG in app: Загружено 0 записей из базы данных
 
-    response = self.full_dispatch_request()
+[2025-05-11 17:31:01,328] DEBUG in app: Exiting index function
 
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[2025-05-11 17:31:08,342] DEBUG in app: Entering index function
 
-  File "/opt/venv/lib/python3.12/site-packages/flask/app.py", line 1486, in full_dispatch_request
+[2025-05-11 17:31:08,343] INFO in app: Соединение с базой данных установлено!
 
-    rv = self.handle_user_exception(e)
+[2025-05-11 17:31:08,349] DEBUG in app: Загружено 0 записей из базы данных
 
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[2025-05-11 17:31:08,349] DEBUG in app: Exiting index function
 
-  File "/opt/venv/lib/python3.12/site-packages/flask_cors/extension.py", line 176, in wrapped_function
+[2025-05-11 17:31:16,868] DEBUG in app: Applying transaction 1 with digest a0176724e35d614a9cb54de430785ae3518bb384f3e726d17f2abbb2c667ca93
 
-    return cors_after_request(app.make_response(f(*args, **kwargs)))
+[2025-05-11 17:31:16,850] DEBUG in app: Entering index function
 
-                                                ^^^^^^^^^^^^^^^^^^
+[2025-05-11 17:31:16,868] DEBUG in app: Transaction data to apply: {'timestamp': '2025-05-11T17:31:16.867930+00:00', 'user_id': 1, 'ДокументID': 2, 'Единица_ИзмеренияID': 1, 'Количество': 1.0, 'СкладОтправительID': 3, 'СкладПолучательID': 2, 'ТоварID': 1}
 
-  File "/opt/venv/lib/python3.12/site-packages/flask/app.py", line 1484, in full_dispatch_request
+[2025-05-11 17:31:16,852] INFO in app: Соединение с базой данных установлено!
 
-    rv = self.dispatch_request()
+[2025-05-11 17:31:16,868] INFO in app: Transaction hash generated: 751a86dac82ba78aa8651dbc172c4f3ec5b2aac493132c7614ec8882df8ac310
 
-         ^^^^^^^^^^^^^^^^^^^^^^^
+[2025-05-11 17:31:16,867] DEBUG in app: Загружено 0 записей из базы данных
 
-  File "/opt/venv/lib/python3.12/site-packages/flask/app.py", line 1469, in dispatch_request
+[2025-05-11 17:31:16,867] DEBUG in app: POST-запрос получен: ImmutableMultiDict([('csrf_token', 'IjMxZDVlOGJhMDRiZWE4N2E5ZmEzNDQxMDU4ZGY1MmEzZTViNDY0OGIi.aCDe3A.Y0ZhpI-aoYJnK___zQQlTTkkfiM'), ('СкладОтправительID', '3'), ('СкладПолучательID', '2'), ('ДокументID', '2'), ('ТоварID', '1'), ('Количество', '1'), ('Единица_ИзмеренияID', '1')])
 
-    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)
+[2025-05-11 17:31:16,867] DEBUG in app: Форма успешно прошла валидацию
 
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[2025-05-11 17:31:16,867] DEBUG in app: Сформированы данные транзакции: {'СкладОтправительID': 3, 'СкладПолучательID': 2, 'ДокументID': 2, 'ТоварID': 1, 'Количество': 1.0, 'Единица_ИзмеренияID': 1, 'timestamp': '2025-05-11T17:31:16.867629+00:00'}
 
-  File "/app/app.py", line 876, in receive_block
+[2025-05-11 17:31:16,867] DEBUG in app: Выбран узел 0 для обработки транзакции
 
-    if block_data['index'] != expected_index:
+[2025-05-11 17:31:16,867] DEBUG in app: Node 0 handling request from client: 1
 
-       ^^^^^^^^^^
+[2025-05-11 17:31:16,867] DEBUG in app: Request data: {'СкладОтправительID': 3, 'СкладПолучательID': 2, 'ДокументID': 2, 'ТоварID': 1, 'Количество': 1.0, 'Единица_ИзмеренияID': 1, 'timestamp': '2025-05-11T17:31:16.867629+00:00'}
 
-NameError: name 'block_data' is not defined
+[2025-05-11 17:31:16,867] DEBUG in app: Created request with sequence_number 1
+
+[2025-05-11 17:31:17,100] INFO in app: Transaction 751a86dac82ba78aa8651dbc172c4f3ec5b2aac493132c7614ec8882df8ac310 committed. Block #1 added
+
+[2025-05-11 17:31:17,100] DEBUG in app: Broadcasting block #1
+
+[2025-05-11 17:31:17,710] WARNING in app: Consensus not reached for block #1. Confirmations: 1/3
+
+[2025-05-11 17:31:17,711] INFO in app: Node 0 starts blockchain sync
+
+[2025-05-11 17:31:17,963] DEBUG in app: Транзакция успешно отправлена на узел 0
