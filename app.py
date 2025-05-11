@@ -871,187 +871,48 @@ async def check_node_availability(self, node_id):
         return False
 
 @app.route('/receive_block', methods=['POST'])
-@csrf.exempt
 def receive_block():
-    if block_data['index'] != expected_index:
-        app.logger.error(f"Invalid block sequence: expected {expected_index}, got {block_data['index']}")
-        return jsonify({"error": "Invalid block sequence"}), 400
-    """Обработчик для приема новых блоков от других узлов сети"""
-    processing_start = time.time()
-    app.logger.info("\n" + "=" * 50)
-    app.logger.info(f"Starting block processing at {datetime.now(timezone.utc)}")
-
-    def json_serial(obj):
-        """Вспомогательная функция для сериализации datetime"""
-        if isinstance(obj, (datetime, date)):
-            return obj.isoformat()
-        raise TypeError(f"Type {type(obj)} not serializable")
-
+    """
+    Метод для обработки входящего блока от другого узла.
+    """
     try:
-        # 1. Проверяем Content-Type
-        if request.content_type != 'application/json':
-            app.logger.error("Invalid Content-Type")
-            return jsonify({"error": "Content-Type must be application/json"}), 400
-
-        # 2. Получаем данные
-        try:
-            data = request.get_json()
-            if not data:
-                app.logger.error("No data provided")
-                return jsonify({"error": "No data provided"}), 400
-        except Exception as e:
-            app.logger.error(f"Invalid JSON: {str(e)}")
-            return jsonify({"error": f"Invalid JSON: {str(e)}"}), 400
-
-        # 3. Проверка обязательных полей
-        required_fields = ['sender_id', 'block', 'node_id']
-        if not all(field in data for field in required_fields):
-            app.logger.error(f"Missing required fields: {required_fields}")
-            return jsonify({"error": f"Missing fields: {required_fields}"}), 400
-
-        block = data['block']
-        sender_id = data['sender_id']
-        creator_node_id = data['node_id']
-
-        # 4. Валидация блока
-        required_block_fields = ['index', 'transactions', 'previous_hash', 'hash']
-        if not all(field in block for field in required_block_fields):
-            app.logger.error(f"Invalid block structure, missing fields: {required_block_fields}")
-            return jsonify({"error": f"Invalid block structure"}), 400
-
-        # 5. Для генезис-блока особые правила
-        if block['index'] == 0:
-            with app.app_context():
-                existing_genesis = BlockchainBlock.query.filter_by(index=0).first()
-                if existing_genesis:
-                    if existing_genesis.hash != block['hash']:
-                        app.logger.error("Genesis block hash mismatch")
-                        return jsonify({"error": "Genesis block hash mismatch"}), 400
-                    return jsonify({"status": "Genesis block already exists"}), 200
-                else:
-                    # Создаем генезис-блок
-                    new_block = BlockchainBlock(
-                        index=0,
-                        timestamp=datetime.fromisoformat(block['timestamp']),
-                        transactions=json.dumps(block['transactions']),
-                        previous_hash=block['previous_hash'],
-                        hash=block['hash'],
-                        node_id=creator_node_id,
-                        confirming_node_id=sender_id,
-                        confirmed=True  # Генезис-блок всегда подтвержден
-                    )
-                    db.session.add(new_block)
-                    db.session.commit()
-                    return jsonify({"status": "Genesis block created"}), 200
-
-        # 5. Проверяем, не является ли этот блок дубликатом
-        existing_block = BlockchainBlock.query.filter_by(
-            index=block['index'],
-            node_id=creator_node_id,
-            confirming_node_id=NODE_ID  # Проверяем, не подтверждали ли мы уже этот блок
-        ).first()
+        # Получение данных блока из запроса
+        block_data = request.get_json()  # Убедитесь, что данные корректно парсятся
         
-        if existing_block:
-            app.logger.info(f"Block #{block['index']} from node {creator_node_id} already confirmed by this node")
-            confirmations = BlockchainBlock.query.filter_by(index=block['index']).count()
-            return jsonify({
-                "status": "Block already confirmed by this node",
-                "confirmations": confirmations,
-                "total_nodes": len(nodes)
-            }), 200
+        # Проверка, что данные получены
+        if not block_data:
+            app.logger.error("No block data received")
+            return jsonify({"error": "No block data received"}), 400
 
-        # 6. Проверка хеша
-        block_copy = {k: v for k, v in block.items() if k != 'hash'}
-        block_str = json.dumps(block_copy, sort_keys=True, default=json_serial)
-        calculated_hash = hashlib.sha256(block_str.encode()).hexdigest()
-
-        if calculated_hash != block['hash']:
-            app.logger.error(f"Block hash mismatch for block #{block['index']}")
-            return jsonify({"error": "Block hash mismatch"}), 400
-
-        # 7. Проверка последовательности
+        # Получение последнего индекса блока в цепочке
         last_block = BlockchainBlock.query.order_by(BlockchainBlock.index.desc()).first()
-        if last_block:
-            if block['index'] == 0:
-                # Генезис-блок - проверяем, что его еще нет
-                existing_genesis = BlockchainBlock.query.filter_by(index=0).first()
-                if existing_genesis:
-                    app.logger.error("Genesis block already exists")
-                    return jsonify({"error": "Genesis block already exists"}), 400
-            elif block['index'] != last_block.index + 1:
-                app.logger.error(f"Invalid block sequence: expected {last_block.index + 1}, got {block['index']}")
-                # Попробуем синхронизировать цепочку
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.create_task(nodes[NODE_ID].sync_blockchain())
-                else:
-                    loop.run_until_complete(nodes[NODE_ID].sync_blockchain())
-                return jsonify({"error": "Invalid block sequence"}), 400
-            elif block['previous_hash'] != last_block.hash:
-                app.logger.error(f"Previous hash mismatch: expected {last_block.hash}, got {block['previous_hash']}")
-                # Попробуем синхронизировать цепочку
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.create_task(nodes[NODE_ID].sync_blockchain())
-                else:
-                    loop.run_until_complete(nodes[NODE_ID].sync_blockchain())
-                return jsonify({"error": "Previous hash mismatch"}), 400
+        expected_index = last_block.index + 1 if last_block else 0  # Если блокчейн пуст, начнем с 0
 
-        # 8. Сохранение блока с информацией о подтверждении
+        # Проверка последовательности блоков
+        if block_data['index'] != expected_index:
+            app.logger.error(f"Invalid block sequence: expected {expected_index}, got {block_data['index']}")
+            return jsonify({"error": "Invalid block sequence"}), 400
+
+        # Добавление нового блока в базу данных
         new_block = BlockchainBlock(
-            index=block['index'],
-            timestamp=datetime.fromisoformat(block['timestamp']),
-            transactions=json.dumps(block['transactions']),
-            previous_hash=block['previous_hash'],
-            hash=block['hash'],
-            node_id=creator_node_id,
-            confirming_node_id=sender_id,  # ID текущего узла, подтверждающего блок
-            confirmed=False
+            index=block_data['index'],
+            timestamp=block_data['timestamp'],
+            transactions=json.dumps(block_data['transactions']),
+            previous_hash=block_data['previous_hash'],
+            hash=block_data['hash'],
+            node_id=block_data['node_id']
         )
-        
         db.session.add(new_block)
         db.session.commit()
-        app.logger.info(f"Saved confirmation for block #{block['index']} from node {creator_node_id}")
 
-        # 9. Рассылаем подтверждение другим узлам
-        asyncio.create_task(broadcast_confirmation(
-            block['index'],
-            creator_node_id,
-            NODE_ID
-        ))
-
-        # 10. Проверяем достижение консенсуса (2f + 1 подтверждений)
-        confirmations = BlockchainBlock.query.filter_by(index=block['index']).count()
-        required_confirmations = (len(nodes) // 3 * 2) + 1  # 2f + 1
-        
-        if confirmations >= required_confirmations:
-            # Обновляем статус подтверждения для всех копий этого блока
-            BlockchainBlock.query.filter_by(index=block['index']).update({'confirmed': True})
-            db.session.commit()
-            app.logger.info(f"Consensus reached for block #{block['index']} with {confirmations} confirmations")
-
-        # 11. Получаем окончательное количество подтверждений
-        final_confirmations = BlockchainBlock.query.filter_by(index=block['index']).count()
-        
-        app.logger.info(f"Block #{block['index']} from node {creator_node_id} accepted with {final_confirmations} confirmations")
-        processing_time = time.time() - processing_start
-        app.logger.info(f"Block processing completed in {processing_time:.2f} seconds")
-
-        return jsonify({
-            "status": "Block accepted",
-            "processing_time": f"{processing_time:.2f} seconds",
-            "confirmations": final_confirmations,
-            "total_nodes": len(nodes),
-            "consensus_reached": confirmations >= required_confirmations
-        }), 200
+        # Лог успешного добавления блока
+        app.logger.info(f"Block #{new_block.index} successfully added to the blockchain")
+        return jsonify({"status": "Block added successfully"}), 200
 
     except Exception as e:
-        db.session.rollback()
+        # Логирование ошибки с трассировкой
         app.logger.error(f"Error processing block: {str(e)}", exc_info=True)
-        return jsonify({
-            "error": "Internal server error",
-            "details": str(e)
-        }), 500
+        return jsonify({"error": "Internal server error", "details": str(e)}), 500
 
 
 async def broadcast_confirmation(block_index, creator_node_id, confirming_node_id):
