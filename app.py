@@ -1950,7 +1950,7 @@ def get_block_details(block_index):
         confirming_nodes = list({b.node_id for b in blocks})
         
         # Общее количество узлов (все 4 узла)
-        total_nodes = 4  # Исправлено с 3 на 4
+        total_nodes = 4
         
         return jsonify({
             'index': main_block.index,
@@ -1961,7 +1961,7 @@ def get_block_details(block_index):
             'node_id': main_block.node_id,
             'tx_count': len(transactions),
             'confirmations': len(confirming_nodes),
-            'total_nodes': total_nodes,  # Теперь верное количество узлов
+            'total_nodes': total_nodes,
             'confirming_nodes': confirming_nodes
         })
     except Exception as e:
