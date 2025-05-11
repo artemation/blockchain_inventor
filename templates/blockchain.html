@@ -856,7 +856,7 @@
                 .then(data => {
                     const height = data.height;
                     if (height === -1) return;
-
+        
                     // Для каждого блока запрашиваем детали
                     for (let i = 0; i <= height; i++) {
                         fetch(`/get_block_details/${i}`)
@@ -870,7 +870,7 @@
                                         if (confirmationsElement) {
                                             confirmationsElement.textContent = `${blockData.confirmations}/${blockData.total_nodes}`;
                                         }
-
+        
                                         // Обновляем статус блока
                                         const statusElement = blockElement.querySelector('.block-status');
                                         if (statusElement) {
