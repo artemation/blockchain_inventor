@@ -1924,31 +1924,28 @@ async def nodes_status():
 @app.route('/get_block_details/<int:block_index>')
 def get_block_details(block_index):
     try:
-        # Получаем основной блок
-        block = BlockchainBlock.query.filter_by(index=block_index).first()
-        if not block:
-            return jsonify({'error': 'Block not found'}), 404
-
         # Получаем ВСЕ блоки с этим индексом (подтверждения)
         confirming_blocks = BlockchainBlock.query.filter_by(index=block_index).all()
-        confirming_nodes = [b.node_id for b in confirming_blocks]
+        if not confirming_blocks:
+            return jsonify({'error': 'Block not found'}), 404
+
+        # Получаем основной блок (первый с этим индексом)
+        main_block = confirming_blocks[0]
         
-        # Убираем дубликаты (если есть)
-        confirming_nodes = list(set(confirming_nodes))
-        confirmations = len(confirming_nodes)
-
-        # Получаем транзакции
-        transactions = json.loads(block.transactions) if block.transactions else []
-
+        transactions = json.loads(main_block.transactions) if main_block.transactions else []
+        
+        # Получаем список узлов, подтвердивших этот блок
+        confirming_nodes = list(set([b.node_id for b in confirming_blocks]))
+        
         return jsonify({
-            'index': block.index,
-            'timestamp': block.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+            'index': main_block.index,
+            'timestamp': main_block.timestamp.isoformat(),
             'transactions': transactions,
-            'hash': block.hash,
-            'previous_hash': block.previous_hash,
-            'node_id': block.node_id,
+            'hash': main_block.hash,
+            'previous_hash': main_block.previous_hash,
+            'node_id': main_block.node_id,
             'tx_count': len(transactions),
-            'confirmations': confirmations,
+            'confirmations': len(confirming_nodes),
             'total_nodes': len(nodes),  # 4 узла в сети
             'confirming_nodes': confirming_nodes
         })
