@@ -833,15 +833,15 @@ def receive_block():
         # 5. Проверяем, не является ли этот блок дубликатом
         existing_block = BlockchainBlock.query.filter_by(
             index=block['index'],
-            node_id=creator_node_id
+            node_id=creator_node_id,
+            confirming_node_id=NODE_ID  # Проверяем, не подтверждали ли мы уже этот блок
         ).first()
         
         if existing_block:
-            app.logger.info(f"Block #{block['index']} from node {creator_node_id} already exists")
-            # Возвращаем текущее количество подтверждений
+            app.logger.info(f"Block #{block['index']} from node {creator_node_id} already confirmed by this node")
             confirmations = BlockchainBlock.query.filter_by(index=block['index']).count()
             return jsonify({
-                "status": "Block already exists",
+                "status": "Block already confirmed by this node",
                 "confirmations": confirmations,
                 "total_nodes": len(nodes)
             }), 200
@@ -862,7 +862,7 @@ def receive_block():
             app.logger.error(f"Invalid block sequence for block #{block['index']}")
             return jsonify({"error": "Invalid block sequence"}), 400
 
-        # 8. Сохранение блока
+        # 8. Сохранение блока с информацией о подтверждении
         new_block = BlockchainBlock(
             index=block['index'],
             timestamp=datetime.fromisoformat(block['timestamp']),
@@ -870,12 +870,13 @@ def receive_block():
             previous_hash=block['previous_hash'],
             hash=block['hash'],
             node_id=creator_node_id,
-            confirmed=False  # Изначально блок не подтвержден
+            confirming_node_id=NODE_ID,  # ID текущего узла, подтверждающего блок
+            confirmed=False
         )
         
         db.session.add(new_block)
         db.session.commit()
-        app.logger.info(f"Saved block #{block['index']} from node {creator_node_id}")
+        app.logger.info(f"Saved confirmation for block #{block['index']} from node {creator_node_id}")
 
         # 9. Проверяем достижение консенсуса (2f + 1 подтверждений)
         confirmations = BlockchainBlock.query.filter_by(index=block['index']).count()
@@ -1110,78 +1111,48 @@ def check_node_availability_sync(node_id):
 def view_blockchain():
     """Отображает всю цепочку блоков с информацией о подтверждениях"""
     try:
-        # 1. Получаем все блоки из БД, сгруппированные по индексу
-        blocks_query = db.session.query(
-            BlockchainBlock.index,
-            func.count(BlockchainBlock.id).label('confirmations'),
-            func.max(BlockchainBlock.timestamp).label('timestamp')
-        ).group_by(BlockchainBlock.index).order_by(BlockchainBlock.index).all()
+        # Получаем все уникальные индексы блоков
+        block_indices = db.session.query(
+            BlockchainBlock.index
+        ).distinct().order_by(BlockchainBlock.index).all()
 
-        # 2. Получаем справочные данные из базы
-        warehouses = {w.СкладID: w.Название for w in Склады.query.all()}
-        documents = {d.ДокументID: d.Тип_документа for d in Тип_документа.query.all()}
-        products = {p.ТоварID: p.Наименование for p in Товары.query.all()}
-        units = {u.Единица_ИзмеренияID: u.Единица_Измерения for u in Единица_измерения.query.all()}
-
-        # 3. Формируем данные для отображения
         formatted_blocks = []
-        for block in blocks_query:
-            # Получаем ВСЕ блоки с этим индексом
-            all_blocks = BlockchainBlock.query.filter_by(
-                index=block.index
-            ).order_by(BlockchainBlock.node_id).all()
-
+        for index in block_indices:
+            index = index[0]
+            
+            # Получаем все блоки с этим индексом
+            all_blocks = BlockchainBlock.query.filter_by(index=index).all()
+            
             if not all_blocks:
                 continue
 
-            # Берем первый блок как основной (с наименьшим node_id)
+            # Берем первый блок как основной
             main_block = all_blocks[0]
             
             try:
-                # Загружаем транзакции из JSON
                 transactions = json.loads(main_block.transactions)
-
+                
                 # Получаем список узлов, подтвердивших этот блок
-                confirming_nodes = [b.node_id for b in all_blocks]
-
-                # Обогащаем данные транзакций
-                enriched_transactions = []
-                for tx in transactions:
-                    if isinstance(tx, dict):  # Проверяем, что это словарь
-                        if 'message' not in tx:  # Не генезис-блок
-                            enriched_tx = {
-                                **tx,
-                                'sender_name': warehouses.get(tx.get('СкладОтправительID')),
-                                'receiver_name': warehouses.get(tx.get('СкладПолучательID')),
-                                'document_name': documents.get(tx.get('ДокументID')),
-                                'product_name': products.get(tx.get('ТоварID')),
-                                'unit_name': units.get(tx.get('Единица_ИзмеренияID'))
-                            }
-                            enriched_transactions.append(enriched_tx)
-                        else:
-                            enriched_transactions.append(tx)
-
-                # Формируем блок с обогащенными данными
+                confirming_nodes = list({b.confirming_node_id for b in all_blocks})
+                
                 formatted_blocks.append({
-                    'index': block.index,
+                    'index': index,
                     'timestamp': main_block.timestamp,
-                    'transactions': enriched_transactions,
+                    'transactions': transactions,
                     'previous_hash': main_block.previous_hash,
                     'hash': main_block.hash,
                     'node_id': main_block.node_id,
-                    'is_genesis': block.index == 0,
-                    'confirmations': len(all_blocks),  # Используем реальное количество подтверждений
+                    'is_genesis': index == 0,
+                    'confirmations': len(confirming_nodes),
                     'total_nodes': len(nodes),
                     'confirming_nodes': confirming_nodes,
                     'creator_node': main_block.node_id
                 })
-
             except json.JSONDecodeError as e:
-                app.logger.error(f"Error decoding transactions for block {block.index}: {e}")
+                app.logger.error(f"Error decoding transactions for block {index}: {e}")
                 continue
 
         return render_template('blockchain.html', blocks=formatted_blocks)
-
     except Exception as e:
         app.logger.error(f"Error in view_blockchain: {e}")
         flash(f'Ошибка при загрузке блокчейна: {e}', 'danger')
@@ -1948,7 +1919,7 @@ def get_block_details(block_index):
         transactions = json.loads(main_block.transactions) if main_block.transactions else []
         
         # Получаем список уникальных узлов, подтвердивших этот блок
-        confirming_nodes = list({b.node_id for b in blocks})
+        confirming_nodes = list({b.confirming_node_id for b in blocks})
         
         return jsonify({
             'index': main_block.index,
