@@ -802,7 +802,7 @@
                     if (data.error) {
                         throw new Error(data.error);
                     }
-        
+            
                     // Заполняем модальное окно данными
                     document.getElementById('block-details-id').textContent = data.index;
                     document.getElementById('block-details-hash').textContent = data.hash;
@@ -811,7 +811,7 @@
                     document.getElementById('block-details-time').textContent = data.timestamp;
                     document.getElementById('block-details-tx-count').textContent = data.tx_count;
                     document.getElementById('block-details-confirmations').textContent = `${data.confirmations}/${data.total_nodes}`;
-        
+            
                     // Заполняем подтвердившие узлы
                     const nodesContainer = document.getElementById('confirming-nodes');
                     nodesContainer.innerHTML = '';
@@ -826,7 +826,7 @@
                     } else {
                         nodesContainer.innerHTML = '<span class="text-muted">Нет данных о подтверждающих узлах</span>';
                     }
-        
+            
                     // Показываем модальное окно
                     $('#blockDetailsModal').modal('show');
                 })
