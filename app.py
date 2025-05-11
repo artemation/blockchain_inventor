@@ -221,8 +221,6 @@ class Node:
         self.requests = {}
         self.chain = [self.create_genesis_block()]
 
-        # Запускаем синхронизацию при старте
-        asyncio.create_task(self.sync_blockchain())
     
     def create_genesis_block(self):
         with app.app_context():
@@ -261,6 +259,7 @@ class Node:
 
     # В начале работы узла
     async def sync_blockchain(self):
+        app.logger.info(f"Node {self.node_id} started sync...")
         app.logger.info(f"Node {self.node_id} starts blockchain sync")
         
         try:
@@ -1960,17 +1959,25 @@ async def receive_confirmation():
         app.logger.error(f"Error processing confirmation: {e}")
         return jsonify({"error": str(e)}), 500
 
-if __name__ == '__main__':
-    print(f"Запуск узла {NODE_ID} на порту {PORT}")
-    print(f"Известные узлы: {nodes[NODE_ID].nodes}")
-    
-    # Добавьте эту часть для синхронизации при старте
-    with app.app_context():
+def start_sync(node):
+    """Запуск синхронизации в отдельном потоке"""
+    import threading
+    def run_sync():
+        import asyncio
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(nodes[NODE_ID].sync_blockchain())
-        finally:
-            loop.close()
+        loop.run_until_complete(node.sync_blockchain())
+        loop.close()
     
+    thread = threading.Thread(target=run_sync, daemon=True)
+    thread.start()
+
+if __name__ == '__main__':
+    # Инициализация узла
+    current_node = nodes[NODE_ID]
+    
+    # Запуск синхронизации в фоне
+    start_sync(current_node)
+    
+    # Запуск Flask-приложения
     app.run(host='0.0.0.0', port=PORT)
