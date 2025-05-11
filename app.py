@@ -222,7 +222,36 @@ class Node:
         self.chain = [self.create_genesis_block()]
 
     def create_genesis_block(self):
-        return Block(0, datetime.now(timezone.utc), [], "0")
+        # Проверяем, существует ли уже генезис-блок в БД
+        with app.app_context():
+            existing_genesis = BlockchainBlock.query.filter_by(index=0).first()
+            if existing_genesis:
+                return Block(
+                    index=0,
+                    timestamp=existing_genesis.timestamp,
+                    transactions=json.loads(existing_genesis.transactions),
+                    previous_hash=existing_genesis.previous_hash
+                )
+        
+        # Создаем новый генезис-блок только если его нет
+        genesis = Block(0, datetime.now(timezone.utc), [], "0")
+        
+        # Сохраняем в БД
+        with app.app_context():
+            genesis_db = BlockchainBlock(
+                index=genesis.index,
+                timestamp=genesis.timestamp,
+                transactions=json.dumps(genesis.transactions, ensure_ascii=False),
+                previous_hash=genesis.previous_hash,
+                hash=genesis.hash,
+                node_id=self.node_id,
+                confirming_node_id=self.node_id,
+                confirmed=True  # Генезис-блок всегда считается подтвержденным
+            )
+            db.session.add(genesis_db)
+            db.session.commit()
+        
+        return genesis
 
     def get_last_block(self):
         return self.chain[-1]
@@ -231,44 +260,47 @@ class Node:
     async def sync_blockchain(self):
         app.logger.info(f"Node {self.node_id} starts blockchain sync")
         
-        # Получаем последний локальный блок
-        with app.app_context():
-            local_last_block = BlockchainBlock.query.order_by(BlockchainBlock.index.desc()).first()
-            local_index = local_last_block.index if local_last_block else -1
-        
-        # Запрашиваем высоту блокчейна у других узлов
-        heights = {}
-        for node_id, node in self.nodes.items():
-            if node_id != self.node_id:
-                try:
-                    async with aiohttp.ClientSession() as session:
-                        url = f"https://{node.host}:{node.port}/get_blockchain_height"
-                        async with session.get(url, timeout=5) as response:
-                            if response.status == 200:
-                                data = await response.json()
-                                heights[node_id] = data.get('height', -1)
-                except Exception as e:
-                    app.logger.error(f"Error getting height from node {node_id}: {e}")
-                    continue
-        
-        # Если не получили ответы от других узлов, выходим
-        if not heights:
-            app.logger.warning("No responses from other nodes during sync")
-            return
-        
-        # Находим максимальную высоту
-        max_height = max(heights.values())
-        
-        # Если наш блокчейн короче, синхронизируем недостающие блоки
-        if max_height > local_index:
-            app.logger.info(f"Need to sync from {local_index + 1} to {max_height}")
-            for i in range(local_index + 1, max_height + 1):
-                # Пытаемся получить блок с каждого узла
-                for node_id in heights:
-                    if heights[node_id] >= i:
-                        success = await self.request_block_from_node(node_id, i)
-                        if success:
-                            break
+        try:
+            # Получаем последний локальный блок
+            with app.app_context():
+                local_last_block = BlockchainBlock.query.order_by(BlockchainBlock.index.desc()).first()
+                local_index = local_last_block.index if local_last_block else -1
+            
+            # Запрашиваем высоту блокчейна у других узлов
+            heights = {}
+            for node_id, node in self.nodes.items():
+                if node_id != self.node_id:
+                    try:
+                        async with aiohttp.ClientSession() as session:
+                            url = f"https://{node.host}/get_blockchain_height"
+                            async with session.get(url, timeout=5) as response:
+                                if response.status == 200:
+                                    data = await response.json()
+                                    heights[node_id] = data.get('height', -1)
+                    except Exception as e:
+                        app.logger.error(f"Error getting height from node {node_id}: {e}")
+                        continue
+            
+            # Если не получили ответы от других узлов, выходим
+            if not heights:
+                app.logger.warning("No responses from other nodes during sync")
+                return
+            
+            # Находим максимальную высоту
+            max_height = max(heights.values())
+            
+            # Если наш блокчейн короче, синхронизируем недостающие блоки
+            if max_height > local_index:
+                app.logger.info(f"Need to sync from {local_index + 1} to {max_height}")
+                for i in range(local_index + 1, max_height + 1):
+                    # Пытаемся получить блок с каждого узла
+                    for node_id in heights:
+                        if heights[node_id] >= i:
+                            success = await self.request_block_from_node(node_id, i)
+                            if success:
+                                break
+        except Exception as e:
+            app.logger.error(f"Error during blockchain sync: {e}")
 
     async def request_block_from_node(self, node_id, block_index):
         """Запросить блок с определенным индексом у узла"""
@@ -279,7 +311,7 @@ class Node:
 
             async with aiohttp.ClientSession() as session:
                 url = f"https://{host}:{port}/get_block/{block_index}"
-                async with session.get(url) as response:
+                async with session.get(url, timeout=5) as response:
                     if response.status == 200:
                         block_data = await response.json()
 
@@ -601,7 +633,7 @@ class Node:
         try:
             async with aiohttp.ClientSession() as session:
                 url = f"https://{self.nodes[node_id].host}/health"
-                async with session.get(url, timeout=2) as response:
+                async with session.get(url, timeout=5) as response:
                     return response.status == 200
         except Exception as e:
             app.logger.error(f"Error checking node {node_id} availability: {e}")
@@ -832,7 +864,7 @@ async def check_node_availability(self, node_id):
     try:
         async with aiohttp.ClientSession() as session:
             url = f"https://{self.nodes[node_id].host}/health"
-            async with session.get(url, timeout=2) as response:
+            async with session.get(url, timeout=5) as response:
                 return response.status == 200
     except Exception as e:
         app.logger.error(f"Error checking node {node_id} availability: {e}")
@@ -883,6 +915,31 @@ def receive_block():
         if not all(field in block for field in required_block_fields):
             app.logger.error(f"Invalid block structure, missing fields: {required_block_fields}")
             return jsonify({"error": f"Invalid block structure"}), 400
+
+        # 5. Для генезис-блока особые правила
+        if block['index'] == 0:
+            with app.app_context():
+                existing_genesis = BlockchainBlock.query.filter_by(index=0).first()
+                if existing_genesis:
+                    if existing_genesis.hash != block['hash']:
+                        app.logger.error("Genesis block hash mismatch")
+                        return jsonify({"error": "Genesis block hash mismatch"}), 400
+                    return jsonify({"status": "Genesis block already exists"}), 200
+                else:
+                    # Создаем генезис-блок
+                    new_block = BlockchainBlock(
+                        index=0,
+                        timestamp=datetime.fromisoformat(block['timestamp']),
+                        transactions=json.dumps(block['transactions']),
+                        previous_hash=block['previous_hash'],
+                        hash=block['hash'],
+                        node_id=creator_node_id,
+                        confirming_node_id=sender_id,
+                        confirmed=True  # Генезис-блок всегда подтвержден
+                    )
+                    db.session.add(new_block)
+                    db.session.commit()
+                    return jsonify({"status": "Genesis block created"}), 200
 
         # 5. Проверяем, не является ли этот блок дубликатом
         existing_block = BlockchainBlock.query.filter_by(
@@ -2011,7 +2068,7 @@ async def nodes_status():
                 async with aiohttp.ClientSession() as session:
                     url = f"https://{node.host}:{node.port}/health"
                     try:
-                        async with session.get(url, timeout=2) as response:
+                        async with session.get(url, timeout=5) as response:
                             is_online = response.status == 200
                     except (aiohttp.ClientError, asyncio.TimeoutError):
                         is_online = False
