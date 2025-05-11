@@ -416,26 +416,23 @@ class Node:
                 await self.apply_transaction(sequence_number, digest)
 
     async def broadcast_new_block(self, block_data):
-        """
-        Рассылает новый блок всем узлам сети и возвращает количество подтверждений.
-        Возвращает кортеж (количество подтверждений, общее количество узлов)
-        """
+        """Рассылает новый блок всем узлам сети и сохраняет подтверждения в БД"""
         # 1. Подготовка данных блока
         headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json'
         }
-
+    
         # Конвертируем Block в dict если необходимо
         if isinstance(block_data, Block):
             block_data = block_data.to_dict()
-
+    
         # 2. Валидация структуры блока
         required_block_fields = ['index', 'transactions', 'previous_hash', 'hash']
         if not all(field in block_data for field in required_block_fields):
             app.logger.error(f"Invalid block structure. Missing fields: {required_block_fields}")
             return 0, len(self.nodes)
-
+    
         # 3. Проверка и нормализация временной метки
         try:
             if 'timestamp' not in block_data:
@@ -446,7 +443,7 @@ class Node:
         except ValueError as e:
             app.logger.error(f"Invalid timestamp format: {str(e)}")
             return 0, len(self.nodes)
-
+    
         # 4. Подготовка payload
         try:
             payload = {
@@ -459,13 +456,13 @@ class Node:
         except Exception as e:
             app.logger.error(f"Error preparing payload: {str(e)}")
             return 0, len(self.nodes)
-
+    
         # 5. Настройки для рассылки
         confirmations = 1  # Текущий узел всегда подтверждает
         failed_nodes = []
-        confirming_nodes = set()  # Используем set для избежания дубликатов
+        confirming_nodes = {self.node_id}  # Используем set для избежания дубликатов
         timeout = aiohttp.ClientTimeout(total=10)
-    
+        
         async def send_to_node(node_id, node):
             nonlocal confirmations
             try:
@@ -476,11 +473,11 @@ class Node:
                     return False
     
                 url = f"https://{node.host}:{node.port}/receive_block"
-    
+                
                 async with aiohttp.ClientSession(headers=headers) as session:
                     async with session.post(url, json=payload, timeout=timeout) as response:
                         if response.status == 200:
-                            if node_id not in confirming_nodes:  # Проверяем, что узел еще не подтвердил
+                            if node_id not in confirming_nodes:
                                 confirming_nodes.add(node_id)
                                 confirmations += 1
                             app.logger.debug(f"Node {node_id} accepted block #{block_data['index']}")
@@ -489,55 +486,77 @@ class Node:
                 app.logger.error(f"Unexpected error with node {node_id}: {str(e)}", exc_info=True)
                 failed_nodes.append(node_id)
                 return False
-
-        # Проверяем доступность всех узлов перед рассылкой
-        available_nodes = []
-        for node_id in self.nodes:
-            if await self.check_node_availability(node_id):
-                available_nodes.append(node_id)
-
+    
         # Рассылаем только доступным узлам
-        for node_id in available_nodes:
+        for node_id in self.nodes:
             if node_id != self.node_id:
                 await send_to_node(node_id, self.nodes[node_id])
-
-        # 6. Параллельная рассылка
-        try:
-            semaphore = asyncio.Semaphore(4)  # Ограничение одновременных запросов
-
-            async def limited_send(node_id, node):
-                async with semaphore:
-                    return await send_to_node(node_id, node)
-
-            tasks = [
-                limited_send(node_id, node)
-                for node_id, node in self.nodes.items()
-                if node_id != self.node_id
-            ]
-
-            await asyncio.gather(*tasks, return_exceptions=True)
-
-        except Exception as e:
-            app.logger.error(f"Broadcast task error: {str(e)}", exc_info=True)
-
-        # 7. Логирование результатов
-        status_details = (
-            f"Block #{block_data['index']}. "
-            f"Confirmations: {confirmations}/{len(self.nodes)}, "
-            f"Failed: {failed_nodes}"
-        )
-
-        # Проверяем достижение консенсуса (2f + 1 подтверждений)
-        required_confirmations = (len(available_nodes) // 3 * 2 + 1)  # 2f+1
+    
+        # 6. Сохраняем подтверждения в БД
+        with app.app_context():
+            try:
+                # Сохраняем подтверждение от текущего узла
+                existing_confirmation = BlockchainBlock.query.filter_by(
+                    index=block_data['index'],
+                    node_id=self.node_id,
+                    confirming_node_id=self.node_id
+                ).first()
+                
+                if not existing_confirmation:
+                    confirmation = BlockchainBlock(
+                        index=block_data['index'],
+                        timestamp=datetime.fromisoformat(block_data['timestamp']),
+                        transactions=json.dumps(block_data['transactions']),
+                        previous_hash=block_data['previous_hash'],
+                        hash=block_data['hash'],
+                        node_id=self.node_id,
+                        confirming_node_id=self.node_id,
+                        confirmed=False
+                    )
+                    db.session.add(confirmation)
+                
+                # Сохраняем подтверждения от других узлов
+                for node_id in confirming_nodes:
+                    if node_id != self.node_id:
+                        existing = BlockchainBlock.query.filter_by(
+                            index=block_data['index'],
+                            node_id=self.node_id,
+                            confirming_node_id=node_id
+                        ).first()
+                        
+                        if not existing:
+                            confirmation = BlockchainBlock(
+                                index=block_data['index'],
+                                timestamp=datetime.fromisoformat(block_data['timestamp']),
+                                transactions=json.dumps(block_data['transactions']),
+                                previous_hash=block_data['previous_hash'],
+                                hash=block_data['hash'],
+                                node_id=self.node_id,
+                                confirming_node_id=node_id,
+                                confirmed=False
+                            )
+                            db.session.add(confirmation)
+                
+                db.session.commit()
+            except Exception as e:
+                app.logger.error(f"Error saving confirmations to DB: {e}")
+                db.session.rollback()
+        
+        # 7. Проверяем достижение консенсуса (2f + 1 подтверждений)
+        required_confirmations = (len(self.nodes) // 3 * 2) + 1
         consensus_reached = confirmations >= required_confirmations
-
+    
         if consensus_reached:
-            app.logger.info(f"Consensus reached for {status_details}")
+            # Обновляем статус подтверждения для всех копий этого блока
+            with app.app_context():
+                BlockchainBlock.query.filter_by(index=block_data['index']).update({'confirmed': True})
+                db.session.commit()
+            app.logger.info(f"Consensus reached for block #{block_data['index']} with {confirmations} confirmations")
         else:
-            app.logger.warning(f"Consensus not reached for {status_details}")
+            app.logger.warning(f"Consensus not reached for block #{block_data['index']}. Confirmations: {confirmations}/{len(self.nodes)}")
             # Синхронизация при неудаче
             await self.sync_blockchain()
-
+    
         return confirmations, len(self.nodes)
 
     # Проверка доступности узла
@@ -879,7 +898,14 @@ def receive_block():
         db.session.commit()
         app.logger.info(f"Saved confirmation for block #{block['index']} from node {creator_node_id}")
 
-        # 9. Проверяем достижение консенсуса (2f + 1 подтверждений)
+        # 9. Рассылаем подтверждение другим узлам
+        asyncio.create_task(broadcast_confirmation(
+            block['index'],
+            creator_node_id,
+            NODE_ID
+        ))
+
+        # 10. Проверяем достижение консенсуса (2f + 1 подтверждений)
         confirmations = BlockchainBlock.query.filter_by(index=block['index']).count()
         required_confirmations = (len(nodes) // 3 * 2) + 1  # 2f + 1
         
@@ -889,7 +915,7 @@ def receive_block():
             db.session.commit()
             app.logger.info(f"Consensus reached for block #{block['index']} with {confirmations} confirmations")
 
-        # 10. Получаем окончательное количество подтверждений
+        # 11. Получаем окончательное количество подтверждений
         final_confirmations = BlockchainBlock.query.filter_by(index=block['index']).count()
         
         app.logger.info(f"Block #{block['index']} from node {creator_node_id} accepted with {final_confirmations} confirmations")
@@ -912,6 +938,43 @@ def receive_block():
             "details": str(e)
         }), 500
 
+
+async def broadcast_confirmation(block_index, creator_node_id, confirming_node_id):
+    """Рассылает подтверждение блока другим узлам"""
+    try:
+        block = BlockchainBlock.query.filter_by(
+            index=block_index,
+            node_id=creator_node_id,
+            confirming_node_id=confirming_node_id
+        ).first()
+        
+        if not block:
+            return
+
+        block_data = {
+            'index': block.index,
+            'timestamp': block.timestamp.isoformat(),
+            'transactions': json.loads(block.transactions),
+            'previous_hash': block.previous_hash,
+            'hash': block.hash,
+            'node_id': block.node_id
+        }
+
+        for node_id, node in nodes.items():
+            if node_id != NODE_ID and node_id != creator_node_id:
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        url = f"https://{node.host}:{node.port}/receive_confirmation"
+                        payload = {
+                            'block': block_data,
+                            'confirming_node_id': confirming_node_id
+                        }
+                        await session.post(url, json=payload, timeout=5)
+                except Exception as e:
+                    app.logger.error(f"Error broadcasting confirmation to node {node_id}: {e}")
+
+    except Exception as e:
+        app.logger.error(f"Error in broadcast_confirmation: {e}")
 
 @app.route('/inventory_report')
 @login_required
@@ -1121,37 +1184,55 @@ def view_blockchain():
         for index in block_indices:
             index = index[0]
             
-            # Получаем все блоки с этим индексом
-            all_blocks = BlockchainBlock.query.filter_by(index=index).all()
+            # Получаем все подтверждения для этого блока
+            confirmations = BlockchainBlock.query.filter_by(index=index).all()
             
-            if not all_blocks:
+            if not confirmations:
                 continue
 
-            # Берем первый блок как основной
-            main_block = all_blocks[0]
-            
-            try:
-                transactions = json.loads(main_block.transactions)
+            # Группируем по node_id (создателям блоков)
+            blocks_by_creator = {}
+            for conf in confirmations:
+                if conf.node_id not in blocks_by_creator:
+                    blocks_by_creator[conf.node_id] = []
+                blocks_by_creator[conf.node_id].append(conf)
+
+            # Для каждого создателя блока создаем запись
+            for creator_id, blocks in blocks_by_creator.items():
+                main_block = blocks[0]
                 
-                # Получаем список узлов, подтвердивших этот блок
-                confirming_nodes = list({b.confirming_node_id for b in all_blocks})
-                
-                formatted_blocks.append({
-                    'index': index,
-                    'timestamp': main_block.timestamp,
-                    'transactions': transactions,
-                    'previous_hash': main_block.previous_hash,
-                    'hash': main_block.hash,
-                    'node_id': main_block.node_id,
-                    'is_genesis': index == 0,
-                    'confirmations': len(confirming_nodes),
-                    'total_nodes': len(nodes),
-                    'confirming_nodes': confirming_nodes,
-                    'creator_node': main_block.node_id
-                })
-            except json.JSONDecodeError as e:
-                app.logger.error(f"Error decoding transactions for block {index}: {e}")
-                continue
+                try:
+                    transactions = json.loads(main_block.transactions)
+                    
+                    # Получаем список уникальных узлов, подтвердивших этот блок
+                    confirming_nodes = list({b.confirming_node_id for b in blocks})
+                    
+                    # Проверяем достижение консенсуса
+                    required_confirmations = (len(nodes) // 3 * 2) + 1
+                    consensus_reached = len(confirming_nodes) >= required_confirmations
+                    
+                    # Обновляем статус подтверждения в БД
+                    if consensus_reached:
+                        for b in blocks:
+                            b.confirmed = True
+                        db.session.commit()
+
+                    formatted_blocks.append({
+                        'index': index,
+                        'timestamp': main_block.timestamp,
+                        'transactions': transactions,
+                        'previous_hash': main_block.previous_hash,
+                        'hash': main_block.hash,
+                        'node_id': creator_id,
+                        'is_genesis': index == 0,
+                        'confirmations': len(confirming_nodes),
+                        'total_nodes': len(nodes),
+                        'confirming_nodes': confirming_nodes,
+                        'consensus_reached': consensus_reached
+                    })
+                except json.JSONDecodeError as e:
+                    app.logger.error(f"Error decoding transactions for block {index}: {e}")
+                    continue
 
         return render_template('blockchain.html', blocks=formatted_blocks)
     except Exception as e:
@@ -1936,6 +2017,46 @@ def get_block_details(block_index):
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/receive_confirmation', methods=['POST'])
+@csrf.exempt
+async def receive_confirmation():
+    """Обработчик для приема подтверждений блоков от других узлов"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        block = data['block']
+        confirming_node_id = data['confirming_node_id']
+
+        # Проверяем, существует ли уже такое подтверждение
+        existing = BlockchainBlock.query.filter_by(
+            index=block['index'],
+            node_id=block['node_id'],
+            confirming_node_id=confirming_node_id
+        ).first()
+
+        if not existing:
+            new_confirmation = BlockchainBlock(
+                index=block['index'],
+                timestamp=datetime.fromisoformat(block['timestamp']),
+                transactions=json.dumps(block['transactions']),
+                previous_hash=block['previous_hash'],
+                hash=block['hash'],
+                node_id=block['node_id'],
+                confirming_node_id=confirming_node_id,
+                confirmed=False
+            )
+            db.session.add(new_confirmation)
+            db.session.commit()
+
+        return jsonify({"status": "Confirmation accepted"}), 200
+
+    except Exception as e:
+        app.logger.error(f"Error processing confirmation: {e}")
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     print(f"Запуск узла {NODE_ID} на порту {PORT}")
