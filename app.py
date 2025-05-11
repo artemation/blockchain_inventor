@@ -875,6 +875,7 @@ def receive_block():
         
         db.session.add(new_block)
         db.session.commit()
+        app.logger.info(f"Saved block #{block['index']} from node {creator_node_id}")
 
         # 9. Проверяем достижение консенсуса (2f + 1 подтверждений)
         confirmations = BlockchainBlock.query.filter_by(index=block['index']).count()
@@ -1125,23 +1126,23 @@ def view_blockchain():
         # 3. Формируем данные для отображения
         formatted_blocks = []
         for block in blocks_query:
-            # Получаем основной блок (первый с этим индексом)
-            main_block = BlockchainBlock.query.filter_by(
+            # Получаем ВСЕ блоки с этим индексом
+            all_blocks = BlockchainBlock.query.filter_by(
                 index=block.index
-            ).order_by(BlockchainBlock.node_id).first()
+            ).order_by(BlockchainBlock.node_id).all()
 
-            if not main_block:
+            if not all_blocks:
                 continue
 
+            # Берем первый блок как основной (с наименьшим node_id)
+            main_block = all_blocks[0]
+            
             try:
                 # Загружаем транзакции из JSON
                 transactions = json.loads(main_block.transactions)
 
                 # Получаем список узлов, подтвердивших этот блок
-                confirming_blocks = BlockchainBlock.query.filter_by(
-                    index=block.index
-                ).all()
-                confirming_nodes = [b.node_id for b in confirming_blocks]
+                confirming_nodes = [b.node_id for b in all_blocks]
 
                 # Обогащаем данные транзакций
                 enriched_transactions = []
@@ -1169,7 +1170,7 @@ def view_blockchain():
                     'hash': main_block.hash,
                     'node_id': main_block.node_id,
                     'is_genesis': block.index == 0,
-                    'confirmations': block.confirmations,
+                    'confirmations': len(all_blocks),  # Используем реальное количество подтверждений
                     'total_nodes': len(nodes),
                     'confirming_nodes': confirming_nodes,
                     'creator_node': main_block.node_id
@@ -1949,9 +1950,6 @@ def get_block_details(block_index):
         # Получаем список уникальных узлов, подтвердивших этот блок
         confirming_nodes = list({b.node_id for b in blocks})
         
-        # Общее количество узлов (все 4 узла)
-        total_nodes = 4
-        
         return jsonify({
             'index': main_block.index,
             'timestamp': main_block.timestamp.isoformat(),
@@ -1961,7 +1959,7 @@ def get_block_details(block_index):
             'node_id': main_block.node_id,
             'tx_count': len(transactions),
             'confirmations': len(confirming_nodes),
-            'total_nodes': total_nodes,
+            'total_nodes': len(nodes),
             'confirming_nodes': confirming_nodes
         })
     except Exception as e:
