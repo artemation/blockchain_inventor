@@ -842,7 +842,8 @@ def receive_block():
             confirmations = BlockchainBlock.query.filter_by(index=block['index']).count()
             return jsonify({
                 "status": "Block already exists",
-                "confirmations": confirmations
+                "confirmations": confirmations,
+                "total_nodes": len(nodes)
             }), 200
 
         # 6. Проверка хеша
@@ -868,24 +869,36 @@ def receive_block():
             transactions=json.dumps(block['transactions']),
             previous_hash=block['previous_hash'],
             hash=block['hash'],
-            node_id=creator_node_id
+            node_id=creator_node_id,
+            confirmed=False  # Изначально блок не подтвержден
         )
         
         db.session.add(new_block)
         db.session.commit()
 
-        # 9. Получаем количество подтверждений для этого блока
+        # 9. Проверяем достижение консенсуса (2f + 1 подтверждений)
         confirmations = BlockchainBlock.query.filter_by(index=block['index']).count()
+        required_confirmations = (len(nodes) // 3 * 2) + 1  # 2f + 1
         
-        app.logger.info(f"Block #{block['index']} from node {creator_node_id} accepted with {confirmations} confirmations")
+        if confirmations >= required_confirmations:
+            # Обновляем статус подтверждения для всех копий этого блока
+            BlockchainBlock.query.filter_by(index=block['index']).update({'confirmed': True})
+            db.session.commit()
+            app.logger.info(f"Consensus reached for block #{block['index']} with {confirmations} confirmations")
+
+        # 10. Получаем окончательное количество подтверждений
+        final_confirmations = BlockchainBlock.query.filter_by(index=block['index']).count()
+        
+        app.logger.info(f"Block #{block['index']} from node {creator_node_id} accepted with {final_confirmations} confirmations")
         processing_time = time.time() - processing_start
         app.logger.info(f"Block processing completed in {processing_time:.2f} seconds")
 
         return jsonify({
             "status": "Block accepted",
             "processing_time": f"{processing_time:.2f} seconds",
-            "confirmations": confirmations,
-            "total_nodes": len(nodes)
+            "confirmations": final_confirmations,
+            "total_nodes": len(nodes),
+            "consensus_reached": confirmations >= required_confirmations
         }), 200
 
     except Exception as e:
