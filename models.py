@@ -131,6 +131,7 @@ class BlockchainBlock(db.Model):
     hash = db.Column(db.String(64), nullable=False, unique=True)
     node_id = db.Column(db.Integer, nullable=False)
     confirmed = db.Column(db.Boolean, default=False)
+    confirming_node_id = db.Column(db.Integer, nullable=False)  # ID узла, подтвердившего блок
 
     def __repr__(self):
         return f'<Block {self.index}>'
