@@ -1924,18 +1924,17 @@ async def nodes_status():
 @app.route('/get_block_details/<int:block_index>')
 def get_block_details(block_index):
     try:
-        # Получаем ВСЕ блоки с этим индексом (подтверждения)
-        confirming_blocks = BlockchainBlock.query.filter_by(index=block_index).all()
-        if not confirming_blocks:
+        # Получаем все блоки с этим индексом
+        blocks = BlockchainBlock.query.filter_by(index=block_index).all()
+        if not blocks:
             return jsonify({'error': 'Block not found'}), 404
 
-        # Получаем основной блок (первый с этим индексом)
-        main_block = confirming_blocks[0]
-        
+        # Берем первый блок как основной
+        main_block = blocks[0]
         transactions = json.loads(main_block.transactions) if main_block.transactions else []
         
-        # Получаем список узлов, подтвердивших этот блок
-        confirming_nodes = list(set([b.node_id for b in confirming_blocks]))
+        # Получаем список уникальных узлов, подтвердивших этот блок
+        confirming_nodes = list({b.node_id for b in blocks})
         
         return jsonify({
             'index': main_block.index,
