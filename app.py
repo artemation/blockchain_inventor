@@ -801,19 +801,23 @@ def receive_block():
     try:
         # 1. Проверяем Content-Type
         if request.content_type != 'application/json':
+            app.logger.error("Invalid Content-Type")
             return jsonify({"error": "Content-Type must be application/json"}), 400
 
         # 2. Получаем данные
         try:
             data = request.get_json()
             if not data:
+                app.logger.error("No data provided")
                 return jsonify({"error": "No data provided"}), 400
         except Exception as e:
+            app.logger.error(f"Invalid JSON: {str(e)}")
             return jsonify({"error": f"Invalid JSON: {str(e)}"}), 400
 
         # 3. Проверка обязательных полей
         required_fields = ['sender_id', 'block', 'node_id']
         if not all(field in data for field in required_fields):
+            app.logger.error(f"Missing required fields: {required_fields}")
             return jsonify({"error": f"Missing fields: {required_fields}"}), 400
 
         block = data['block']
@@ -823,6 +827,7 @@ def receive_block():
         # 4. Валидация блока
         required_block_fields = ['index', 'transactions', 'previous_hash', 'hash']
         if not all(field in block for field in required_block_fields):
+            app.logger.error(f"Invalid block structure, missing fields: {required_block_fields}")
             return jsonify({"error": f"Invalid block structure"}), 400
 
         # 5. Проверяем, не является ли этот блок дубликатом
@@ -833,7 +838,12 @@ def receive_block():
         
         if existing_block:
             app.logger.info(f"Block #{block['index']} from node {creator_node_id} already exists")
-            return jsonify({"status": "Block already exists"}), 200
+            # Возвращаем текущее количество подтверждений
+            confirmations = BlockchainBlock.query.filter_by(index=block['index']).count()
+            return jsonify({
+                "status": "Block already exists",
+                "confirmations": confirmations
+            }), 200
 
         # 6. Проверка хеша
         block_copy = {k: v for k, v in block.items() if k != 'hash'}
@@ -864,13 +874,18 @@ def receive_block():
         db.session.add(new_block)
         db.session.commit()
 
-        app.logger.info(f"Block #{block['index']} from node {creator_node_id} accepted")
+        # 9. Получаем количество подтверждений для этого блока
+        confirmations = BlockchainBlock.query.filter_by(index=block['index']).count()
+        
+        app.logger.info(f"Block #{block['index']} from node {creator_node_id} accepted with {confirmations} confirmations")
         processing_time = time.time() - processing_start
         app.logger.info(f"Block processing completed in {processing_time:.2f} seconds")
 
         return jsonify({
             "status": "Block accepted",
-            "processing_time": f"{processing_time:.2f} seconds"
+            "processing_time": f"{processing_time:.2f} seconds",
+            "confirmations": confirmations,
+            "total_nodes": len(nodes)
         }), 200
 
     except Exception as e:
@@ -1914,9 +1929,13 @@ def get_block_details(block_index):
         if not block:
             return jsonify({'error': 'Block not found'}), 404
 
-        # Получаем все подтверждения этого блока (блоки с тем же индексом)
+        # Получаем ВСЕ блоки с этим индексом (подтверждения)
         confirming_blocks = BlockchainBlock.query.filter_by(index=block_index).all()
         confirming_nodes = [b.node_id for b in confirming_blocks]
+        
+        # Убираем дубликаты (если есть)
+        confirming_nodes = list(set(confirming_nodes))
+        confirmations = len(confirming_nodes)
 
         # Получаем транзакции
         transactions = json.loads(block.transactions) if block.transactions else []
@@ -1929,9 +1948,9 @@ def get_block_details(block_index):
             'previous_hash': block.previous_hash,
             'node_id': block.node_id,
             'tx_count': len(transactions),
-            'confirmations': len(confirming_nodes),
-            'total_nodes': len(nodes),  # Общее количество узлов в сети
-            'confirming_nodes': confirming_nodes  # Список ID узлов, подтвердивших блок
+            'confirmations': confirmations,
+            'total_nodes': len(nodes),  # 4 узла в сети
+            'confirming_nodes': confirming_nodes
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
