@@ -792,12 +792,7 @@
         // Функция для показа деталей блока
         function showBlockDetails(blockIndex) {
             fetch(`/get_block_details/${blockIndex}`)
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('Network response was not ok');
-                    }
-                    return response.json();
-                })
+                .then(response => response.json())
                 .then(data => {
                     if (data.error) {
                         throw new Error(data.error);
@@ -808,7 +803,7 @@
                     document.getElementById('block-details-hash').textContent = data.hash;
                     document.getElementById('block-details-prev-hash').textContent = data.previous_hash;
                     document.getElementById('block-details-node').textContent = `Узел ${data.node_id}`;
-                    document.getElementById('block-details-time').textContent = data.timestamp;
+                    document.getElementById('block-details-time').textContent = new Date(data.timestamp).toLocaleString();
                     document.getElementById('block-details-tx-count').textContent = data.tx_count;
                     document.getElementById('block-details-confirmations').textContent = `${data.confirmations}/${data.total_nodes}`;
             
@@ -856,7 +851,7 @@
                 .then(data => {
                     const height = data.height;
                     if (height === -1) return;
-        
+            
                     // Для каждого блока запрашиваем детали
                     for (let i = 0; i <= height; i++) {
                         fetch(`/get_block_details/${i}`)
@@ -870,11 +865,12 @@
                                         if (confirmationsElement) {
                                             confirmationsElement.textContent = `${blockData.confirmations}/${blockData.total_nodes}`;
                                         }
-        
+            
                                         // Обновляем статус блока
                                         const statusElement = blockElement.querySelector('.block-status');
                                         if (statusElement) {
-                                            if (blockData.confirmations >= (blockData.total_nodes // 2 + 1)) {
+                                            const requiredConfirmations = Math.floor(blockData.total_nodes / 3 * 2) + 1;
+                                            if (blockData.confirmations >= requiredConfirmations) {
                                                 statusElement.className = 'badge badge-success block-status';
                                                 statusElement.textContent = `Подтвержден (${blockData.confirmations}/${blockData.total_nodes})`;
                                             } else {
