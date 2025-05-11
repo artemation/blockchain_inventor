@@ -26,6 +26,7 @@ import time
 load_dotenv()
 
 app = Flask(__name__)
+CORS(app)
 
 NODE_DOMAINS = {
     0: os.environ.get('NODE0_DOMAIN', 'blockchaininventory0.up.railway.app'),
@@ -34,13 +35,6 @@ NODE_DOMAINS = {
     3: os.environ.get('NODE3_DOMAIN', 'blockchaininventory3.up.railway.app')
 }
 
-CORS(app, resources={
-    r"/receive_block": {"origins": [f"https://{domain}" for domain in NODE_DOMAINS.values()]},
-    r"/node_message": {"origins": [f"https://{domain}" for domain in NODE_DOMAINS.values()]},
-    r"/health": {"origins": "*"},
-    r"/get_block/*": {"origins": "*"},
-    r"/get_blockchain_height": {"origins": "*"}
-})
 app.logger.setLevel(logging.DEBUG)  # Убедитесь, что уровень логирования установлен на DEBUG
 
 file_handler = RotatingFileHandler('app.log', maxBytes=1024 * 1024, backupCount=5)
