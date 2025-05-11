@@ -249,11 +249,17 @@ class Node:
                                 heights[node_id] = data.get('height', -1)
                 except Exception as e:
                     app.logger.error(f"Error getting height from node {node_id}: {e}")
+                    continue
+        
+        # Если не получили ответы от других узлов, выходим
+        if not heights:
+            app.logger.warning("No responses from other nodes during sync")
+            return
         
         # Находим максимальную высоту
-        max_height = max(heights.values()) if heights else local_index
+        max_height = max(heights.values())
         
-        # Синхронизируем недостающие блоки
+        # Если наш блокчейн короче, синхронизируем недостающие блоки
         if max_height > local_index:
             app.logger.info(f"Need to sync from {local_index + 1} to {max_height}")
             for i in range(local_index + 1, max_height + 1):
@@ -456,7 +462,35 @@ class Node:
         except Exception as e:
             app.logger.error(f"Error preparing payload: {str(e)}")
             return 0, len(self.nodes)
-    
+
+            # 5. Сохранение подтверждений в БД
+            with app.app_context():
+                try:
+                    # Сохраняем блок от создателя
+                    existing_block = BlockchainBlock.query.filter_by(
+                        index=block_data['index'],
+                        node_id=block_data.get('node_id', self.node_id),
+                        confirming_node_id=self.node_id
+                    ).first()
+                    
+                    if not existing_block:
+                        new_block = BlockchainBlock(
+                            index=block_data['index'],
+                            timestamp=datetime.fromisoformat(block_data['timestamp']),
+                            transactions=json.dumps(block_data['transactions']),
+                            previous_hash=block_data['previous_hash'],
+                            hash=block_data['hash'],
+                            node_id=block_data.get('node_id', self.node_id),
+                            confirming_node_id=self.node_id,
+                            confirmed=False
+                        )
+                        db.session.add(new_block)
+                    
+                    db.session.commit()
+                except Exception as e:
+                    app.logger.error(f"Error saving block to DB: {e}")
+                    db.session.rollback()
+        
         # 5. Настройки для рассылки
         confirmations = 1  # Текущий узел всегда подтверждает
         failed_nodes = []
@@ -877,10 +911,23 @@ def receive_block():
 
         # 7. Проверка последовательности
         last_block = BlockchainBlock.query.order_by(BlockchainBlock.index.desc()).first()
-        if last_block and (block['index'] != last_block.index + 1 or
-                           block['previous_hash'] != last_block.hash):
-            app.logger.error(f"Invalid block sequence for block #{block['index']}")
-            return jsonify({"error": "Invalid block sequence"}), 400
+        if last_block:
+            if block['index'] == 0:
+                # Генезис-блок - проверяем, что его еще нет
+                existing_genesis = BlockchainBlock.query.filter_by(index=0).first()
+                if existing_genesis:
+                    app.logger.error("Genesis block already exists")
+                    return jsonify({"error": "Genesis block already exists"}), 400
+            elif block['index'] != last_block.index + 1:
+                app.logger.error(f"Invalid block sequence: expected {last_block.index + 1}, got {block['index']}")
+                # Попробуем синхронизировать цепочку
+                asyncio.create_task(nodes[NODE_ID].sync_blockchain())
+                return jsonify({"error": "Invalid block sequence"}), 400
+            elif block['previous_hash'] != last_block.hash:
+                app.logger.error(f"Previous hash mismatch: expected {last_block.hash}, got {block['previous_hash']}")
+                # Попробуем синхронизировать цепочку
+                asyncio.create_task(nodes[NODE_ID].sync_blockchain())
+                return jsonify({"error": "Previous hash mismatch"}), 400
 
         # 8. Сохранение блока с информацией о подтверждении
         new_block = BlockchainBlock(
@@ -890,7 +937,7 @@ def receive_block():
             previous_hash=block['previous_hash'],
             hash=block['hash'],
             node_id=creator_node_id,
-            confirming_node_id=NODE_ID,  # ID текущего узла, подтверждающего блок
+            confirming_node_id=sender_id,  # ID текущего узла, подтверждающего блок
             confirmed=False
         )
         
