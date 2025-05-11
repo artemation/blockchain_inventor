@@ -789,7 +789,6 @@
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
     <script>
 
-        // Функция для показа деталей блока
         function showBlockDetails(blockIndex) {
             fetch(`/get_block_details/${blockIndex}`)
                 .then(response => response.json())
@@ -853,41 +852,40 @@
                     if (height === -1) return;
             
                     // Для каждого блока запрашиваем детали
-                    for (let i = 0; i <= height; i++) {
-                        fetch(`/get_block_details/${i}`)
+                    document.querySelectorAll('.block-card').forEach(blockElement => {
+                        const blockIndex = blockElement.getAttribute('data-block-index');
+                        
+                        fetch(`/get_block_details/${blockIndex}`)
                             .then(response => response.json())
                             .then(blockData => {
                                 if (!blockData.error) {
-                                    const blockElement = document.querySelector(`.block-card[data-block-index="${i}"]`);
-                                    if (blockElement) {
-                                        // Обновляем счетчик подтверждений
-                                        const confirmationsElement = blockElement.querySelector('.confirmations-count');
-                                        if (confirmationsElement) {
-                                            confirmationsElement.textContent = `${blockData.confirmations}/${blockData.total_nodes}`;
-                                        }
+                                    // Обновляем счетчик подтверждений
+                                    const confirmationsElement = blockElement.querySelector('.confirmations-count');
+                                    if (confirmationsElement) {
+                                        confirmationsElement.textContent = `${blockData.confirmations}/${blockData.total_nodes}`;
+                                    }
             
-                                        // Обновляем статус блока
-                                        const statusElement = blockElement.querySelector('.block-status');
-                                        if (statusElement) {
-                                            const requiredConfirmations = Math.floor(blockData.total_nodes / 3 * 2) + 1;
-                                            if (blockData.confirmations >= requiredConfirmations) {
-                                                statusElement.className = 'badge badge-success block-status';
-                                                statusElement.textContent = `Подтвержден (${blockData.confirmations}/${blockData.total_nodes})`;
-                                            } else {
-                                                statusElement.className = 'badge badge-warning block-status';
-                                                statusElement.textContent = `Ожидает (${blockData.confirmations}/${blockData.total_nodes})`;
-                                            }
+                                    // Обновляем статус блока
+                                    const statusElement = blockElement.querySelector('.block-status');
+                                    if (statusElement) {
+                                        const requiredConfirmations = Math.floor(blockData.total_nodes / 3 * 2) + 1;
+                                        if (blockData.confirmations >= requiredConfirmations) {
+                                            statusElement.className = 'badge badge-success block-status';
+                                            statusElement.textContent = `Подтвержден (${blockData.confirmations}/${blockData.total_nodes})`;
+                                        } else {
+                                            statusElement.className = 'badge badge-warning block-status';
+                                            statusElement.textContent = `Ожидает (${blockData.confirmations}/${blockData.total_nodes})`;
                                         }
                                     }
                                 }
                             });
-                    }
+                    });
                 });
         }
 
         // Обновляем каждые 3 секунды
         setInterval(updateConfirmations, 3000);
-
+        
         // Инициализация при загрузке
         document.addEventListener('DOMContentLoaded', function() {
             // Добавляем data-атрибуты для блоков
@@ -895,7 +893,7 @@
                 const blockIndex = block.querySelector('.block-title').textContent.match(/#(\d+)/)[1];
                 block.setAttribute('data-block-index', blockIndex);
             });
-
+        
             // Первое обновление
             updateConfirmations();
         });
