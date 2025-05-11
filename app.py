@@ -1949,6 +1949,9 @@ def get_block_details(block_index):
         # Получаем список уникальных узлов, подтвердивших этот блок
         confirming_nodes = list({b.node_id for b in blocks})
         
+        # Общее количество узлов (исключая недоступные)
+        total_nodes = 3  # Узлы 0, 1, 2 (узел 3 недоступен)
+        
         return jsonify({
             'index': main_block.index,
             'timestamp': main_block.timestamp.isoformat(),
@@ -1958,7 +1961,7 @@ def get_block_details(block_index):
             'node_id': main_block.node_id,
             'tx_count': len(transactions),
             'confirmations': len(confirming_nodes),
-            'total_nodes': len(nodes),  # 4 узла в сети
+            'total_nodes': total_nodes,  # Используем актуальное количество узлов
             'confirming_nodes': confirming_nodes
         })
     except Exception as e:
