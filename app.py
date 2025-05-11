@@ -873,9 +873,9 @@ async def check_node_availability(self, node_id):
 @app.route('/receive_block', methods=['POST'])
 @csrf.exempt
 def receive_block():
-    if block.index != expected_index:
-    app.logger.error(f"Invalid block sequence: expected {expected_index}, got {block.index}")
-    return jsonify({"error": "Invalid block sequence"}), 400
+    if block_data['index'] != expected_index:
+        app.logger.error(f"Invalid block sequence: expected {expected_index}, got {block_data['index']}")
+        return jsonify({"error": "Invalid block sequence"}), 400
     """Обработчик для приема новых блоков от других узлов сети"""
     processing_start = time.time()
     app.logger.info("\n" + "=" * 50)
