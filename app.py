@@ -221,6 +221,9 @@ class Node:
         self.requests = {}
         self.chain = [self.create_genesis_block()]
 
+        # Запускаем синхронизацию при старте
+        asyncio.create_task(self.sync_blockchain())
+    
     def create_genesis_block(self):
         with app.app_context():
             # Проверяем, существует ли уже генезис-блок в БД
@@ -454,176 +457,112 @@ class Node:
                 await self.apply_transaction(sequence_number, digest)
 
     async def broadcast_new_block(self, block_data):
-        """Рассылает новый блок всем узлам сети и сохраняет подтверждения в БД"""
-        # 1. Подготовка данных блока
-        headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        }
-    
-        # Конвертируем Block в dict если необходимо
-        if isinstance(block_data, Block):
-            block_data = block_data.to_dict()
-    
-        # 2. Валидация структуры блока
-        required_block_fields = ['index', 'transactions', 'previous_hash', 'hash']
-        if not all(field in block_data for field in required_block_fields):
-            app.logger.error(f"Invalid block structure. Missing fields: {required_block_fields}")
-            return 0, len(self.nodes)
-    
-        # 3. Проверка и нормализация временной метки
+    """Рассылает новый блок всем узлам сети и сохраняет подтверждения в БД"""
+    # 1. Подготовка и валидация блока (оставляем ваш текущий код)
+    headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+    }
+
+    if isinstance(block_data, Block):
+        block_data = block_data.to_dict()
+
+    required_block_fields = ['index', 'transactions', 'previous_hash', 'hash']
+    if not all(field in block_data for field in required_block_fields):
+        app.logger.error(f"Invalid block structure. Missing fields: {required_block_fields}")
+        return 0, len(self.nodes)
+
+    try:
+        if 'timestamp' not in block_data:
+            block_data['timestamp'] = datetime.now(timezone.utc).isoformat()
+        else:
+            dt = datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00'))
+            block_data['timestamp'] = dt.isoformat()
+    except ValueError as e:
+        app.logger.error(f"Invalid timestamp format: {str(e)}")
+        return 0, len(self.nodes)
+
+    # 2. Подготовка payload (упрощаем)
+    payload = {
+        'sender_id': self.node_id,
+        'block': block_data
+    }
+
+    # 3. Сохраняем блок от создателя (ваш текущий код)
+    with app.app_context():
         try:
-            if 'timestamp' not in block_data:
-                block_data['timestamp'] = datetime.now(timezone.utc).isoformat()
-            else:
-                dt = datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00'))
-                block_data['timestamp'] = dt.isoformat()
-        except ValueError as e:
-            app.logger.error(f"Invalid timestamp format: {str(e)}")
-            return 0, len(self.nodes)
-    
-        # 4. Подготовка payload
-        try:
-            payload = {
-                'sender_id': self.node_id,
-                'block': block_data,
-                'node_id': self.node_id,
-                'timestamp': datetime.now(timezone.utc).isoformat()
-            }
-            app.logger.debug(f"Broadcasting block #{block_data['index']}")
+            existing_block = BlockchainBlock.query.filter_by(
+                index=block_data['index'],
+                node_id=self.node_id,
+                confirming_node_id=self.node_id
+            ).first()
+            
+            if not existing_block:
+                new_block = BlockchainBlock(
+                    index=block_data['index'],
+                    timestamp=datetime.fromisoformat(block_data['timestamp']),
+                    transactions=json.dumps(block_data['transactions']),
+                    previous_hash=block_data['previous_hash'],
+                    hash=block_data['hash'],
+                    node_id=self.node_id,
+                    confirming_node_id=self.node_id,
+                    confirmed=False
+                )
+                db.session.add(new_block)
+            db.session.commit()
         except Exception as e:
-            app.logger.error(f"Error preparing payload: {str(e)}")
+            app.logger.error(f"Error saving block to DB: {e}")
+            db.session.rollback()
             return 0, len(self.nodes)
 
-            # 5. Сохранение подтверждений в БД
-            with app.app_context():
-                try:
-                    # Сохраняем блок от создателя
-                    existing_block = BlockchainBlock.query.filter_by(
-                        index=block_data['index'],
-                        node_id=block_data.get('node_id', self.node_id),
-                        confirming_node_id=self.node_id
-                    ).first()
-                    
-                    if not existing_block:
-                        new_block = BlockchainBlock(
-                            index=block_data['index'],
-                            timestamp=datetime.fromisoformat(block_data['timestamp']),
-                            transactions=json.dumps(block_data['transactions']),
-                            previous_hash=block_data['previous_hash'],
-                            hash=block_data['hash'],
-                            node_id=block_data.get('node_id', self.node_id),
-                            confirming_node_id=self.node_id,
-                            confirmed=False
-                        )
-                        db.session.add(new_block)
-                    
-                    db.session.commit()
-                except Exception as e:
-                    app.logger.error(f"Error saving block to DB: {e}")
-                    db.session.rollback()
-        
-        # 5. Настройки для рассылки
-        confirmations = 1  # Текущий узел всегда подтверждает
-        failed_nodes = []
-        confirming_nodes = {self.node_id}  # Используем set для избежания дубликатов
-        timeout = aiohttp.ClientTimeout(total=10)
-        
-        async def send_to_node(node_id, node):
-            nonlocal confirmations
-            try:
-                # Проверка доступности узла
-                if not await self.check_node_availability(node_id):
-                    app.logger.warning(f"Node {node_id} is not available")
-                    failed_nodes.append(node_id)
-                    return False
-    
-                url = f"https://{node.host}:{node.port}/receive_block"
-                
-                async with aiohttp.ClientSession(headers=headers) as session:
-                    async with session.post(url, json=payload, timeout=timeout) as response:
-                        if response.status == 200:
-                            if node_id not in confirming_nodes:
-                                confirming_nodes.add(node_id)
-                                confirmations += 1
-                            app.logger.debug(f"Node {node_id} accepted block #{block_data['index']}")
-                            return True
-            except Exception as e:
-                app.logger.error(f"Unexpected error with node {node_id}: {str(e)}", exc_info=True)
-                failed_nodes.append(node_id)
-                return False
-    
-        # Рассылаем только доступным узлам
-        for node_id in self.nodes:
-            if node_id != self.node_id:
-                await send_to_node(node_id, self.nodes[node_id])
-    
-        # 6. Сохраняем подтверждения в БД
-        with app.app_context():
-            try:
-                # Сохраняем подтверждение от текущего узла
-                existing_confirmation = BlockchainBlock.query.filter_by(
-                    index=block_data['index'],
-                    node_id=self.node_id,
-                    confirming_node_id=self.node_id
-                ).first()
-                
-                if not existing_confirmation:
-                    confirmation = BlockchainBlock(
-                        index=block_data['index'],
-                        timestamp=datetime.fromisoformat(block_data['timestamp']),
-                        transactions=json.dumps(block_data['transactions']),
-                        previous_hash=block_data['previous_hash'],
-                        hash=block_data['hash'],
-                        node_id=self.node_id,
-                        confirming_node_id=self.node_id,
-                        confirmed=False
-                    )
-                    db.session.add(confirmation)
-                
-                # Сохраняем подтверждения от других узлов
-                for node_id in confirming_nodes:
-                    if node_id != self.node_id:
-                        existing = BlockchainBlock.query.filter_by(
-                            index=block_data['index'],
-                            node_id=self.node_id,
-                            confirming_node_id=node_id
-                        ).first()
+    # 4. Рассылка блока другим узлам (исправленная версия)
+    confirmations = 1  # Текущий узел всегда подтверждает
+    confirming_nodes = {self.node_id}
+    timeout = aiohttp.ClientTimeout(total=10)
+
+    for node_id, node in self.nodes.items():
+        if node_id == self.node_id:
+            continue  # Не отправляем себе
+
+        try:
+            async with aiohttp.ClientSession(headers=headers) as session:
+                url = f"https://{node.host}/receive_block"
+                async with session.post(url, json=payload, timeout=timeout) as response:
+                    if response.status == 200:
+                        confirmations += 1
+                        confirming_nodes.add(node_id)
                         
-                        if not existing:
+                        # Сохраняем подтверждение от этого узла
+                        with app.app_context():
                             confirmation = BlockchainBlock(
                                 index=block_data['index'],
                                 timestamp=datetime.fromisoformat(block_data['timestamp']),
                                 transactions=json.dumps(block_data['transactions']),
                                 previous_hash=block_data['previous_hash'],
                                 hash=block_data['hash'],
-                                node_id=self.node_id,
-                                confirming_node_id=node_id,
+                                node_id=self.node_id,  # Создатель блока
+                                confirming_node_id=node_id,  # Кто подтвердил
                                 confirmed=False
                             )
                             db.session.add(confirmation)
-                
-                db.session.commit()
-            except Exception as e:
-                app.logger.error(f"Error saving confirmations to DB: {e}")
-                db.session.rollback()
-        
-        # 7. Проверяем достижение консенсуса (2f + 1 подтверждений)
-        required_confirmations = (len(self.nodes) // 3 * 2) + 1
-        consensus_reached = confirmations >= required_confirmations
-    
-        if consensus_reached:
-            # Обновляем статус подтверждения для всех копий этого блока
-            with app.app_context():
-                BlockchainBlock.query.filter_by(index=block_data['index']).update({'confirmed': True})
-                db.session.commit()
-            app.logger.info(f"Consensus reached for block #{block_data['index']} with {confirmations} confirmations")
-        else:
-            app.logger.warning(f"Consensus not reached for block #{block_data['index']}. Confirmations: {confirmations}/{len(self.nodes)}")
-            # Синхронизация при неудаче
-            await self.sync_blockchain()
-    
-        return confirmations, len(self.nodes)
+                            db.session.commit()
+        except Exception as e:
+            app.logger.error(f"Error broadcasting to node {node_id}: {e}")
+
+    # 5. Проверяем консенсус (ваш текущий код)
+    required_confirmations = (len(self.nodes) // 3 * 2) + 1
+    consensus_reached = confirmations >= required_confirmations
+
+    if consensus_reached:
+        with app.app_context():
+            BlockchainBlock.query.filter_by(index=block_data['index']).update({'confirmed': True})
+            db.session.commit()
+        app.logger.info(f"Consensus reached for block #{block_data['index']} ({confirmations}/{len(self.nodes)})")
+    else:
+        app.logger.warning(f"Consensus not reached for block #{block_data['index']} ({confirmations}/{len(self.nodes)})")
+        await self.sync_blockchain()
+
+    return confirmations, len(self.nodes)
 
     # Проверка доступности узла
     async def check_node_availability(self, node_id):
@@ -871,48 +810,35 @@ async def check_node_availability(self, node_id):
         return False
 
 @app.route('/receive_block', methods=['POST'])
-def receive_block():
-    """
-    Метод для обработки входящего блока от другого узла.
-    """
-    try:
-        # Получение данных блока из запроса
-        block_data = request.get_json()  # Убедитесь, что данные корректно парсятся
-        
-        # Проверка, что данные получены
-        if not block_data:
-            app.logger.error("No block data received")
-            return jsonify({"error": "No block data received"}), 400
+async def receive_block():
+    app.logger.debug(f"Received block from {sender_id}")
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data"}), 400
 
-        # Получение последнего индекса блока в цепочке
-        last_block = BlockchainBlock.query.order_by(BlockchainBlock.index.desc()).first()
-        expected_index = last_block.index + 1 if last_block else 0  # Если блокчейн пуст, начнем с 0
+    block_data = data["block"]
+    sender_id = data["sender_id"]
 
-        # Проверка последовательности блоков
-        if block_data['index'] != expected_index:
-            app.logger.error(f"Invalid block sequence: expected {expected_index}, got {block_data['index']}")
-            return jsonify({"error": "Invalid block sequence"}), 400
+    # Проверяем, что блок валиден
+    last_block = BlockchainBlock.query.order_by(BlockchainBlock.index.desc()).first()
+    if block_data["index"] != (last_block.index + 1 if last_block else 0):
+        return jsonify({"error": "Invalid block index"}), 400
 
-        # Добавление нового блока в базу данных
-        new_block = BlockchainBlock(
-            index=block_data['index'],
-            timestamp=block_data['timestamp'],
-            transactions=json.dumps(block_data['transactions']),
-            previous_hash=block_data['previous_hash'],
-            hash=block_data['hash'],
-            node_id=block_data['node_id']
-        )
-        db.session.add(new_block)
-        db.session.commit()
+    # Сохраняем блок в БД как подтверждение
+    new_block = BlockchainBlock(
+        index=block_data["index"],
+        timestamp=datetime.fromisoformat(block_data["timestamp"]),
+        transactions=json.dumps(block_data["transactions"]),
+        previous_hash=block_data["previous_hash"],
+        hash=block_data["hash"],
+        node_id=sender_id,  # Кто создал блок
+        confirming_node_id=current_node.node_id,  # Мы подтверждаем
+        confirmed=False
+    )
+    db.session.add(new_block)
+    db.session.commit()
 
-        # Лог успешного добавления блока
-        app.logger.info(f"Block #{new_block.index} successfully added to the blockchain")
-        return jsonify({"status": "Block added successfully"}), 200
-
-    except Exception as e:
-        # Логирование ошибки с трассировкой
-        app.logger.error(f"Error processing block: {str(e)}", exc_info=True)
-        return jsonify({"error": "Internal server error", "details": str(e)}), 500
+    return jsonify({"status": "Block accepted"}), 200
 
 
 async def broadcast_confirmation(block_index, creator_node_id, confirming_node_id):
