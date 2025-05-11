@@ -695,7 +695,8 @@ class Node:
                         transactions=json.dumps(new_block.transactions, ensure_ascii=False),
                         previous_hash=new_block.previous_hash,
                         hash=new_block.hash,
-                        node_id=self.node_id
+                        node_id=self.node_id,
+                        confirming_node_id=self.node_id
                     )
 
                     db.session.add(new_record)
