@@ -788,16 +788,6 @@
     <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
     <script>
-        // Инициализация Mermaid
-        mermaid.initialize({
-            startOnLoad: true,
-            theme: 'default',
-            fontFamily: 'inherit',
-            flowchart: {
-                useMaxWidth: true,
-                htmlLabels: true
-            }
-        });
 
         // Функция для показа деталей блока
         function showBlockDetails(blockIndex) {
@@ -845,6 +835,19 @@
                     alert('Ошибка при загрузке деталей блока: ' + error.message);
                 });
         }
+        
+        // Инициализация Mermaid
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            fontFamily: 'inherit',
+            flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true
+            }
+        });
+
+
 
         // Функция для обновления статуса подтверждений
         function updateConfirmations() {
