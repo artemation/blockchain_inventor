@@ -130,6 +130,7 @@ class BlockchainBlock(db.Model):
     previous_hash = db.Column(db.String(64), nullable=False)
     hash = db.Column(db.String(64), nullable=False, unique=True)
     node_id = db.Column(db.Integer, nullable=False)
+    confirmed = db.Column(db.Boolean, default=False)
 
     def __repr__(self):
         return f'<Block {self.index}>'
