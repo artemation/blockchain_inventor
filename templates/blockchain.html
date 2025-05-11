@@ -526,11 +526,11 @@
                                 <span class="badge badge-genesis">Генезис-блок</span>
                             {% endif %}
 
-                            <span class="badge block-status {% if block.confirmations >= (block.total_nodes // 2 + 1) %}badge-success{% else %}badge-warning{% endif %}">
-                                {% if block.confirmations >= (block.total_nodes // 2 + 1) %}
+                            <span class="badge block-status {% if block.confirmations >= ((block.total_nodes // 3) * 2 + 1) %}badge-success{% else %}badge-warning{% endif %}">
+                                {% if block.confirmations >= ((block.total_nodes // 3) * 2 + 1) %}
                                     Подтвержден
                                 {% else %}
-                                    Ожидает подтверждения
+                                    Ожидает
                                 {% endif %}
                                 (<span class="confirmations-count">{{ block.confirmations }}/{{ block.total_nodes }}</span>)
                             </span>
@@ -845,44 +845,35 @@
 
         // Функция для обновления статуса подтверждений
         function updateConfirmations() {
-            fetch('/get_blockchain_height')
-                .then(response => response.json())
-                .then(data => {
-                    const height = data.height;
-                    if (height === -1) return;
-            
-                    // Для каждого блока запрашиваем детали
-                    document.querySelectorAll('.block-card').forEach(blockElement => {
-                        const blockIndex = blockElement.getAttribute('data-block-index');
-                        
-                        fetch(`/get_block_details/${blockIndex}`)
-                            .then(response => response.json())
-                            .then(blockData => {
-                                if (!blockData.error) {
-                                    // Обновляем счетчик подтверждений
-                                    const confirmationsElement = blockElement.querySelector('.confirmations-count');
-                                    if (confirmationsElement) {
-                                        confirmationsElement.textContent = `${blockData.confirmations}/${blockData.total_nodes}`;
-                                    }
-            
-                                    // Обновляем статус блока
-                                    const statusElement = blockElement.querySelector('.block-status');
-                                    if (statusElement) {
-                                        const requiredConfirmations = Math.floor(blockData.total_nodes / 3 * 2) + 1;
-                                        if (blockData.confirmations >= requiredConfirmations) {
-                                            statusElement.className = 'badge badge-success block-status';
-                                            statusElement.textContent = `Подтвержден (${blockData.confirmations}/${blockData.total_nodes})`;
-                                        } else {
-                                            statusElement.className = 'badge badge-warning block-status';
-                                            statusElement.textContent = `Ожидает (${blockData.confirmations}/${blockData.total_nodes})`;
-                                        }
-                                    }
+            document.querySelectorAll('.block-card').forEach(blockElement => {
+                const blockIndex = blockElement.getAttribute('data-block-index');
+                
+                fetch(`/get_block_details/${blockIndex}`)
+                    .then(response => response.json())
+                    .then(blockData => {
+                        if (!blockData.error) {
+                            // Обновляем счетчик подтверждений
+                            const confirmationsElement = blockElement.querySelector('.confirmations-count');
+                            if (confirmationsElement) {
+                                confirmationsElement.textContent = `${blockData.confirmations}/${blockData.total_nodes}`;
+                            }
+        
+                            // Обновляем статус блока
+                            const statusElement = blockElement.querySelector('.block-status');
+                            if (statusElement) {
+                                const requiredConfirmations = Math.floor(blockData.total_nodes / 3 * 2) + 1;
+                                if (blockData.confirmations >= requiredConfirmations) {
+                                    statusElement.className = 'badge badge-success block-status';
+                                    statusElement.textContent = `Подтвержден (${blockData.confirmations}/${blockData.total_nodes})`;
+                                } else {
+                                    statusElement.className = 'badge badge-warning block-status';
+                                    statusElement.textContent = `Ожидает (${blockData.confirmations}/${blockData.total_nodes})`;
                                 }
-                            });
+                            }
+                        }
                     });
-                });
+            });
         }
-
         // Обновляем каждые 3 секунды
         setInterval(updateConfirmations, 3000);
         
