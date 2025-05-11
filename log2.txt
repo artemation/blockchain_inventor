@@ -1,0 +1,53 @@
+Starting Container
+
+[2025-05-11 16:15:44 +0000] [1] [INFO] Starting gunicorn 21.2.0
+
+[2025-05-11 16:15:44 +0000] [1] [INFO] Listening at: http://0.0.0.0:8080 (1)
+
+[2025-05-11 16:15:44 +0000] [1] [INFO] Using worker: gthread
+
+[2025-05-11 16:15:44 +0000] [4] [INFO] Booting worker with pid: 4
+
+[2025-05-11 16:15:45 +0000] [5] [INFO] Booting worker with pid: 5
+
+[2025-05-11 16:15:45 +0000] [6] [INFO] Booting worker with pid: 6
+
+[2025-05-11 16:15:45 +0000] [7] [INFO] Booting worker with pid: 7
+
+[2025-05-11 16:15:45,422] DEBUG in app: This is a test log message at the beginning
+
+[2025-05-11 16:15:45,511] DEBUG in app: This is a test log message at the beginning
+
+[2025-05-11 16:15:45,626] DEBUG in app: This is a test log message at the beginning
+
+[2025-05-11 16:15:45,708] DEBUG in app: This is a test log message at the beginning
+
+[2025-05-11 16:16:43,071] INFO in app: 
+
+==================================================
+
+[2025-05-11 16:16:43,071] INFO in app: Starting block processing at 2025-05-11 16:16:43.071816+00:00
+
+[2025-05-11 16:16:43,079] ERROR in app: Invalid block sequence: expected 2, got 1
+
+[2025-05-11 16:16:43,080] ERROR in app: Error processing block: no running event loop
+
+Traceback (most recent call last):
+
+  File "/app/app.py", line 981, in receive_block
+
+    asyncio.create_task(nodes[NODE_ID].sync_blockchain())
+
+  File "/root/.nix-profile/lib/python3.12/asyncio/tasks.py", line 417, in create_task
+
+    loop = events.get_running_loop()
+
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+RuntimeError: no running event loop
+
+/app/app.py:1040: RuntimeWarning: coroutine 'Node.sync_blockchain' was never awaited
+
+  return jsonify({
+
+RuntimeWarning: Enable tracemalloc to get the object allocation traceback

@@ -1,0 +1,81 @@
+Starting Container
+
+[2025-05-11 16:14:43 +0000] [1] [INFO] Starting gunicorn 21.2.0
+
+[2025-05-11 16:14:43 +0000] [1] [INFO] Listening at: http://0.0.0.0:8080 (1)
+
+[2025-05-11 16:14:43 +0000] [1] [INFO] Using worker: gthread
+
+[2025-05-11 16:14:43 +0000] [4] [INFO] Booting worker with pid: 4
+
+[2025-05-11 16:14:43 +0000] [5] [INFO] Booting worker with pid: 5
+
+[2025-05-11 16:14:43 +0000] [6] [INFO] Booting worker with pid: 6
+
+[2025-05-11 16:14:44 +0000] [7] [INFO] Booting worker with pid: 7
+
+[2025-05-11 16:14:44,623] DEBUG in app: This is a test log message at the beginning
+
+[2025-05-11 16:14:44,812] DEBUG in app: This is a test log message at the beginning
+
+[2025-05-11 16:14:44,874] DEBUG in app: This is a test log message at the beginning
+
+[2025-05-11 16:14:44,963] DEBUG in app: This is a test log message at the beginning
+
+[2025-05-11 16:15:42,367] DEBUG in app: Entering index function
+
+[2025-05-11 16:15:42,369] INFO in app: Соединение с базой данных установлено!
+
+[2025-05-11 16:15:42,385] DEBUG in app: Загружено 0 записей из базы данных
+
+[2025-05-11 16:15:42,386] DEBUG in app: Exiting index function
+
+[2025-05-11 16:16:31,482] DEBUG in app: Entering index function
+
+[2025-05-11 16:16:31,483] INFO in app: Соединение с базой данных установлено!
+
+[2025-05-11 16:16:31,495] DEBUG in app: Загружено 0 записей из базы данных
+
+[2025-05-11 16:16:31,496] DEBUG in app: Exiting index function
+
+[2025-05-11 16:16:41,983] DEBUG in app: Entering index function
+
+[2025-05-11 16:16:41,984] INFO in app: Соединение с базой данных установлено!
+
+[2025-05-11 16:16:41,992] DEBUG in app: Загружено 0 записей из базы данных
+
+[2025-05-11 16:16:41,992] DEBUG in app: POST-запрос получен: ImmutableMultiDict([('csrf_token', 'ImQxZGFlNTQxZWM4MDAwYWYyNGM4MGNlMzZmMTAzZTM1NjE4ZWZlNWIi.aCDNXw.m7luaN-ZpD55neJDbkd-Lyfmsso'), ('СкладОтправительID', '3'), ('СкладПолучательID', '2'), ('ДокументID', '2'), ('ТоварID', '1'), ('Количество', '7'), ('Единица_ИзмеренияID', '1')])
+
+[2025-05-11 16:16:41,992] DEBUG in app: Форма успешно прошла валидацию
+
+[2025-05-11 16:16:41,992] DEBUG in app: Сформированы данные транзакции: {'СкладОтправительID': 3, 'СкладПолучательID': 2, 'ДокументID': 2, 'ТоварID': 1, 'Количество': 7.0, 'Единица_ИзмеренияID': 1, 'timestamp': '2025-05-11T16:16:41.992916+00:00'}
+
+[2025-05-11 16:16:41,993] DEBUG in app: Выбран узел 3 для обработки транзакции
+
+[2025-05-11 16:16:41,993] DEBUG in app: Node 3 handling request from client: 4
+
+[2025-05-11 16:16:41,993] DEBUG in app: Request data: {'СкладОтправительID': 3, 'СкладПолучательID': 2, 'ДокументID': 2, 'ТоварID': 1, 'Количество': 7.0, 'Единица_ИзмеренияID': 1, 'timestamp': '2025-05-11T16:16:41.992916+00:00'}
+
+[2025-05-11 16:16:41,993] DEBUG in app: Created request with sequence_number 1
+
+[2025-05-11 16:16:41,993] DEBUG in app: Applying transaction 1 with digest a259e1febb2c616180e818152021518972616d9cf39903d384665a3c3c0664f8
+
+[2025-05-11 16:16:41,993] DEBUG in app: Transaction data to apply: {'timestamp': '2025-05-11T16:16:41.993267+00:00', 'user_id': 4, 'ДокументID': 2, 'Единица_ИзмеренияID': 1, 'Количество': 7.0, 'СкладОтправительID': 3, 'СкладПолучательID': 2, 'ТоварID': 1}
+
+[2025-05-11 16:16:41,993] INFO in app: Transaction hash generated: 6b7a87e2e98f32c0d8f853dad12b4421745215129ac96d1ab3f3893d4c8636e9
+
+[2025-05-11 16:16:42,041] INFO in app: Transaction 6b7a87e2e98f32c0d8f853dad12b4421745215129ac96d1ab3f3893d4c8636e9 committed. Block #1 added
+
+[2025-05-11 16:16:42,042] DEBUG in app: Broadcasting block #1
+
+[2025-05-11 16:16:43,092] WARNING in app: Consensus not reached for block #1. Confirmations: 1/3
+
+[2025-05-11 16:16:43,092] INFO in app: Node 3 starts blockchain sync
+
+[2025-05-11 16:16:43,663] DEBUG in app: Транзакция успешно отправлена на узел 3
+
+[2025-05-11 16:16:43,664] DEBUG in app: Sending Prepare to node 0 at https://blockchaininventory0.up.railway.app:443/node_message
+
+[2025-05-11 16:16:43,664] DEBUG in app: Sending Prepare to node 1 at https://blockchaininventory1.up.railway.app:443/node_message
+
+[2025-05-11 16:16:43,664] DEBUG in app: Sending Prepare to node 2 at https://blockchaininventory2.up.railway.app:443/node_message
