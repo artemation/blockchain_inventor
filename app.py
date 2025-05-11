@@ -873,6 +873,9 @@ async def check_node_availability(self, node_id):
 @app.route('/receive_block', methods=['POST'])
 @csrf.exempt
 def receive_block():
+    if block.index != expected_index:
+    app.logger.error(f"Invalid block sequence: expected {expected_index}, got {block.index}")
+    return jsonify({"error": "Invalid block sequence"}), 400
     """Обработчик для приема новых блоков от других узлов сети"""
     processing_start = time.time()
     app.logger.info("\n" + "=" * 50)
@@ -978,12 +981,20 @@ def receive_block():
             elif block['index'] != last_block.index + 1:
                 app.logger.error(f"Invalid block sequence: expected {last_block.index + 1}, got {block['index']}")
                 # Попробуем синхронизировать цепочку
-                asyncio.create_task(nodes[NODE_ID].sync_blockchain())
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.create_task(nodes[NODE_ID].sync_blockchain())
+                else:
+                    loop.run_until_complete(nodes[NODE_ID].sync_blockchain())
                 return jsonify({"error": "Invalid block sequence"}), 400
             elif block['previous_hash'] != last_block.hash:
                 app.logger.error(f"Previous hash mismatch: expected {last_block.hash}, got {block['previous_hash']}")
                 # Попробуем синхронизировать цепочку
-                asyncio.create_task(nodes[NODE_ID].sync_blockchain())
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.create_task(nodes[NODE_ID].sync_blockchain())
+                else:
+                    loop.run_until_complete(nodes[NODE_ID].sync_blockchain())
                 return jsonify({"error": "Previous hash mismatch"}), 400
 
         # 8. Сохранение блока с информацией о подтверждении
