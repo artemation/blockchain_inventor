@@ -1,53 +1,65 @@
 Starting Container
 
-[2025-05-11 16:15:38 +0000] [1] [INFO] Starting gunicorn 21.2.0
+[2025-05-11 17:15:42 +0000] [1] [INFO] Starting gunicorn 21.2.0
 
-[2025-05-11 16:15:38 +0000] [1] [INFO] Listening at: http://0.0.0.0:8080 (1)
+[2025-05-11 17:15:42 +0000] [1] [INFO] Listening at: http://0.0.0.0:8080 (1)
 
-[2025-05-11 16:15:38 +0000] [1] [INFO] Using worker: gthread
+[2025-05-11 17:15:42 +0000] [1] [INFO] Using worker: gthread
 
-[2025-05-11 16:15:39 +0000] [4] [INFO] Booting worker with pid: 4
+[2025-05-11 17:15:42 +0000] [4] [INFO] Booting worker with pid: 4
 
-[2025-05-11 16:15:39 +0000] [5] [INFO] Booting worker with pid: 5
+[2025-05-11 17:15:42 +0000] [5] [INFO] Booting worker with pid: 5
 
-[2025-05-11 16:15:39 +0000] [6] [INFO] Booting worker with pid: 6
+[2025-05-11 17:15:42 +0000] [6] [INFO] Booting worker with pid: 6
 
-[2025-05-11 16:15:39 +0000] [7] [INFO] Booting worker with pid: 7
+[2025-05-11 17:15:42 +0000] [7] [INFO] Booting worker with pid: 7
 
-[2025-05-11 16:15:39,773] DEBUG in app: This is a test log message at the beginning
+[2025-05-11 17:15:42,547] DEBUG in app: This is a test log message at the beginning
 
-[2025-05-11 16:15:39,785] DEBUG in app: This is a test log message at the beginning
+[2025-05-11 17:15:42,657] DEBUG in app: This is a test log message at the beginning
 
-[2025-05-11 16:15:39,916] DEBUG in app: This is a test log message at the beginning
+[2025-05-11 17:15:42,728] DEBUG in app: This is a test log message at the beginning
 
-[2025-05-11 16:15:39,971] DEBUG in app: This is a test log message at the beginning
+[2025-05-11 17:15:42,731] DEBUG in app: This is a test log message at the beginning
 
-[2025-05-11 16:16:42,684] INFO in app: 
-
-==================================================
-
-[2025-05-11 16:16:42,684] INFO in app: Starting block processing at 2025-05-11 16:16:42.684525+00:00
-
-[2025-05-11 16:16:42,715] ERROR in app: Invalid block sequence: expected 2, got 1
-
-[2025-05-11 16:16:42,716] ERROR in app: Error processing block: no running event loop
+[2025-05-11 17:17:51,057] ERROR in app: Exception on /receive_block [POST]
 
 Traceback (most recent call last):
 
-  File "/app/app.py", line 981, in receive_block
+  File "/opt/venv/lib/python3.12/site-packages/flask/app.py", line 2190, in wsgi_app
 
-    asyncio.create_task(nodes[NODE_ID].sync_blockchain())
+    response = self.full_dispatch_request()
 
-  File "/root/.nix-profile/lib/python3.12/asyncio/tasks.py", line 417, in create_task
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    loop = events.get_running_loop()
+  File "/opt/venv/lib/python3.12/site-packages/flask/app.py", line 1486, in full_dispatch_request
 
-           ^^^^^^^^^^^^^^^^^^^^^^^^^
+    rv = self.handle_user_exception(e)
 
-RuntimeError: no running event loop
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/app/app.py:1040: RuntimeWarning: coroutine 'Node.sync_blockchain' was never awaited
+  File "/opt/venv/lib/python3.12/site-packages/flask_cors/extension.py", line 176, in wrapped_function
 
-  return jsonify({
+    return cors_after_request(app.make_response(f(*args, **kwargs)))
 
-RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+                                                ^^^^^^^^^^^^^^^^^^
+
+  File "/opt/venv/lib/python3.12/site-packages/flask/app.py", line 1484, in full_dispatch_request
+
+    rv = self.dispatch_request()
+
+         ^^^^^^^^^^^^^^^^^^^^^^^
+
+  File "/opt/venv/lib/python3.12/site-packages/flask/app.py", line 1469, in dispatch_request
+
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)
+
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+  File "/app/app.py", line 876, in receive_block
+
+    if block_data['index'] != expected_index:
+
+       ^^^^^^^^^^
+
+NameError: name 'block_data' is not defined

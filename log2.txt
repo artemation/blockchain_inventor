@@ -1,53 +1,91 @@
 Starting Container
 
-[2025-05-11 16:15:44 +0000] [1] [INFO] Starting gunicorn 21.2.0
+[2025-05-11 17:15:00 +0000] [1] [INFO] Starting gunicorn 21.2.0
 
-[2025-05-11 16:15:44 +0000] [1] [INFO] Listening at: http://0.0.0.0:8080 (1)
+[2025-05-11 17:15:00 +0000] [1] [INFO] Listening at: http://0.0.0.0:8080 (1)
 
-[2025-05-11 16:15:44 +0000] [1] [INFO] Using worker: gthread
+[2025-05-11 17:15:00 +0000] [1] [INFO] Using worker: gthread
 
-[2025-05-11 16:15:44 +0000] [4] [INFO] Booting worker with pid: 4
+[2025-05-11 17:15:00 +0000] [4] [INFO] Booting worker with pid: 4
 
-[2025-05-11 16:15:45 +0000] [5] [INFO] Booting worker with pid: 5
+[2025-05-11 17:15:00 +0000] [5] [INFO] Booting worker with pid: 5
 
-[2025-05-11 16:15:45 +0000] [6] [INFO] Booting worker with pid: 6
+[2025-05-11 17:15:00 +0000] [6] [INFO] Booting worker with pid: 6
 
-[2025-05-11 16:15:45 +0000] [7] [INFO] Booting worker with pid: 7
+[2025-05-11 17:15:00 +0000] [7] [INFO] Booting worker with pid: 7
 
-[2025-05-11 16:15:45,422] DEBUG in app: This is a test log message at the beginning
+[2025-05-11 17:15:00,920] DEBUG in app: This is a test log message at the beginning
 
-[2025-05-11 16:15:45,511] DEBUG in app: This is a test log message at the beginning
+[2025-05-11 17:15:01,013] DEBUG in app: This is a test log message at the beginning
 
-[2025-05-11 16:15:45,626] DEBUG in app: This is a test log message at the beginning
+[2025-05-11 17:15:01,123] DEBUG in app: This is a test log message at the beginning
 
-[2025-05-11 16:15:45,708] DEBUG in app: This is a test log message at the beginning
+[2025-05-11 17:15:01,167] DEBUG in app: This is a test log message at the beginning
 
-[2025-05-11 16:16:43,071] INFO in app: 
+[2025-05-11 17:17:40,682] DEBUG in app: Entering index function
 
-==================================================
+[2025-05-11 17:17:40,684] INFO in app: Соединение с базой данных установлено!
 
-[2025-05-11 16:16:43,071] INFO in app: Starting block processing at 2025-05-11 16:16:43.071816+00:00
+[2025-05-11 17:17:40,697] DEBUG in app: Загружено 0 записей из базы данных
 
-[2025-05-11 16:16:43,079] ERROR in app: Invalid block sequence: expected 2, got 1
+[2025-05-11 17:17:40,697] DEBUG in app: Exiting index function
 
-[2025-05-11 16:16:43,080] ERROR in app: Error processing block: no running event loop
+[2025-05-11 17:17:50,078] DEBUG in app: Entering index function
 
-Traceback (most recent call last):
+[2025-05-11 17:17:50,079] INFO in app: Соединение с базой данных установлено!
 
-  File "/app/app.py", line 981, in receive_block
+[2025-05-11 17:17:50,092] DEBUG in app: Загружено 0 записей из базы данных
 
-    asyncio.create_task(nodes[NODE_ID].sync_blockchain())
+[2025-05-11 17:17:50,092] DEBUG in app: POST-запрос получен: ImmutableMultiDict([('csrf_token', 'ImJmNjBhMDhjM2Q4MDU5YmVkNmU1NzA3OGExNWRkYTBlZmIxZjgwYjIi.aCDbtA.3rjiy8VeRQzCQmY_AsH91KY8qDg'), ('СкладОтправительID', '3'), ('СкладПолучательID', '2'), ('ДокументID', '2'), ('ТоварID', '1'), ('Количество', '1'), ('Единица_ИзмеренияID', '1')])
 
-  File "/root/.nix-profile/lib/python3.12/asyncio/tasks.py", line 417, in create_task
+[2025-05-11 17:17:50,093] DEBUG in app: Форма успешно прошла валидацию
 
-    loop = events.get_running_loop()
+[2025-05-11 17:17:50,093] DEBUG in app: Сформированы данные транзакции: {'СкладОтправительID': 3, 'СкладПолучательID': 2, 'ДокументID': 2, 'ТоварID': 1, 'Количество': 1.0, 'Единица_ИзмеренияID': 1, 'timestamp': '2025-05-11T17:17:50.093059+00:00'}
 
-           ^^^^^^^^^^^^^^^^^^^^^^^^^
+[2025-05-11 17:17:50,093] DEBUG in app: Выбран узел 2 для обработки транзакции
 
-RuntimeError: no running event loop
+[2025-05-11 17:17:50,093] DEBUG in app: Node 2 handling request from client: 3
 
-/app/app.py:1040: RuntimeWarning: coroutine 'Node.sync_blockchain' was never awaited
+[2025-05-11 17:17:50,093] DEBUG in app: Request data: {'СкладОтправительID': 3, 'СкладПолучательID': 2, 'ДокументID': 2, 'ТоварID': 1, 'Количество': 1.0, 'Единица_ИзмеренияID': 1, 'timestamp': '2025-05-11T17:17:50.093059+00:00'}
 
-  return jsonify({
+[2025-05-11 17:17:50,093] DEBUG in app: Transaction data to apply: {'timestamp': '2025-05-11T17:17:50.093220+00:00', 'user_id': 3, 'ДокументID': 2, 'Единица_ИзмеренияID': 1, 'Количество': 1.0, 'СкладОтправительID': 3, 'СкладПолучательID': 2, 'ТоварID': 1}
 
-RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+[2025-05-11 17:17:50,093] DEBUG in app: Created request with sequence_number 1
+
+[2025-05-11 17:17:50,093] INFO in app: Transaction hash generated: 4bc690a042cb4e571756681759cf132a0f6fd80b6f15b871a665f0193309b656
+
+[2025-05-11 17:17:50,093] DEBUG in app: Applying transaction 1 with digest f24feb840f540b0f7e0d13cf8e1689056fa62cad91c806b1e9d7e4d10270cfad
+
+[2025-05-11 17:17:50,413] INFO in app: Transaction 4bc690a042cb4e571756681759cf132a0f6fd80b6f15b871a665f0193309b656 committed. Block #1 added
+
+[2025-05-11 17:17:50,413] DEBUG in app: Broadcasting block #1
+
+[2025-05-11 17:17:51,126] WARNING in app: Consensus not reached for block #1. Confirmations: 1/3
+
+[2025-05-11 17:17:51,126] INFO in app: Node 2 starts blockchain sync
+
+[2025-05-11 17:17:51,382] DEBUG in app: Транзакция успешно отправлена на узел 2
+
+[2025-05-11 17:17:51,382] DEBUG in app: Sending Prepare to node 0 at https://blockchaininventory0.up.railway.app:443/node_message
+
+[2025-05-11 17:17:51,383] DEBUG in app: Sending Prepare to node 1 at https://blockchaininventory1.up.railway.app:443/node_message
+
+[2025-05-11 17:17:51,383] DEBUG in app: Sending Prepare to node 3 at https://blockchaininventory3.up.railway.app:443/node_message
+
+[2025-05-11 17:18:06,196] DEBUG in app: Entering index function
+
+[2025-05-11 17:18:06,198] INFO in app: Соединение с базой данных установлено!
+
+[2025-05-11 17:18:06,207] DEBUG in app: Загружено 1 записей из базы данных
+
+[2025-05-11 17:18:06,207] DEBUG in app: Exiting index function
+
+[2025-05-11 17:18:06,949] DEBUG in app: Entering admin_panel function
+
+[2025-05-11 17:18:07,604] DEBUG in app: Entering index function
+
+[2025-05-11 17:18:07,606] INFO in app: Соединение с базой данных установлено!
+
+[2025-05-11 17:18:07,617] DEBUG in app: Загружено 1 записей из базы данных
+
+[2025-05-11 17:18:07,617] DEBUG in app: Exiting index function
