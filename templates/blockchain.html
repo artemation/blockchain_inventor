@@ -802,13 +802,17 @@
         // Функция для показа деталей блока
         function showBlockDetails(blockIndex) {
             fetch(`/get_block_details/${blockIndex}`)
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
                 .then(data => {
                     if (data.error) {
-                        alert(data.error);
-                        return;
+                        throw new Error(data.error);
                     }
-
+        
                     // Заполняем модальное окно данными
                     document.getElementById('block-details-id').textContent = data.index;
                     document.getElementById('block-details-hash').textContent = data.hash;
@@ -817,24 +821,28 @@
                     document.getElementById('block-details-time').textContent = data.timestamp;
                     document.getElementById('block-details-tx-count').textContent = data.tx_count;
                     document.getElementById('block-details-confirmations').textContent = `${data.confirmations}/${data.total_nodes}`;
-
+        
                     // Заполняем подтвердившие узлы
                     const nodesContainer = document.getElementById('confirming-nodes');
                     nodesContainer.innerHTML = '';
-                    data.confirming_nodes.forEach(nodeId => {
-                        nodesContainer.innerHTML += `
-                            <span class="badge node-badge node-${nodeId}">
-                                <i class="fas fa-server mr-1"></i>Узел ${nodeId}
-                            </span>
-                        `;
-                    });
-
+                    if (data.confirming_nodes && data.confirming_nodes.length > 0) {
+                        data.confirming_nodes.forEach(nodeId => {
+                            nodesContainer.innerHTML += `
+                                <span class="badge node-badge node-${nodeId}">
+                                    <i class="fas fa-server mr-1"></i>Узел ${nodeId}
+                                </span>
+                            `;
+                        });
+                    } else {
+                        nodesContainer.innerHTML = '<span class="text-muted">Нет данных о подтверждающих узлах</span>';
+                    }
+        
                     // Показываем модальное окно
                     $('#blockDetailsModal').modal('show');
                 })
                 .catch(error => {
                     console.error('Error fetching block details:', error);
-                    alert('Ошибка при загрузке деталей блока');
+                    alert('Ошибка при загрузке деталей блока: ' + error.message);
                 });
         }
 
