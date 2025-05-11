@@ -526,8 +526,9 @@
                                 <span class="badge badge-genesis">Генезис-блок</span>
                             {% endif %}
 
-                            <span class="badge block-status {% if block.confirmations >= ((block.total_nodes // 3) * 2 + 1) %}badge-success{% else %}badge-warning{% endif %}">
-                                {% if block.confirmations >= ((block.total_nodes // 3) * 2 + 1) %}
+                            <span class="badge block-status 
+                                {% if block.consensus_reached %}badge-success{% else %}badge-warning{% endif %}">
+                                {% if block.consensus_reached %}
                                     Подтвержден
                                 {% else %}
                                     Ожидает
