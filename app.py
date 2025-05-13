@@ -1118,19 +1118,19 @@ def view_blockchain():
                         for key, value in transaction.items():
                             if key == 'СкладОтправительID':
                                 склад = Склады.query.get(value)
-                                formatted_transaction['СкладОтправитель'] = склад.Название if склад else f"Склад (ID: {value})"
+                                formatted_transaction['СкладОтправитель'] = f"{склад.Название} (ID: {value})" if склад else f"Склад (ID: {value})"
                             elif key == 'СкладПолучательID':
                                 склад = Склады.query.get(value)
-                                formatted_transaction['СкладПолучатель'] = склад.Название if склад else f"Склад (ID: {value})"
+                                formatted_transaction['СкладПолучатель'] = f"{склад.Название} (ID: {value})" if склад else f"Склад (ID: {value})"
                             elif key == 'ДокументID':
                                 doc = Тип_документа.query.get(value)
-                                formatted_transaction['Документ'] = doc.Тип_документа if doc else f"Документ (ID: {value})"
+                                formatted_transaction['Документ'] = f"{doc.Тип_документа} (ID: {value})" if doc else f"Документ (ID: {value})"
                             elif key == 'ТоварID':
                                 товар = Товары.query.get(value)
-                                formatted_transaction['Товар'] = товар.Наименование if товар else f"Товар (ID: {value})"
+                                formatted_transaction['Товар'] = f"{товар.Наименование} (ID: {value})" if товар else f"Товар (ID: {value})"
                             elif key == 'Единица_ИзмеренияID':
                                 unit = Единица_измерения.query.get(value)
-                                formatted_transaction['Единица_Измерения'] = unit.Единица_Измерения if unit else f"Ед. изм. (ID: {value})"
+                                formatted_transaction['Единица_Измерения'] = f"{unit.Единица_Измерения} (ID: {value})" if unit else f"Ед. изм. (ID: {value})"
                             else:
                                 formatted_transaction[key] = value
                         formatted_transactions.append(formatted_transaction)
