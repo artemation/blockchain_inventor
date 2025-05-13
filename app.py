@@ -25,15 +25,15 @@ import time
 
 load_dotenv()
 
-app = Flask(__name__)
-CORS(app)
-
-"""NODE_DOMAINS = {
+NODE_DOMAINS = {
     0: os.environ.get('NODE0_DOMAIN', 'blockchaininventory0.up.railway.app'),
     1: os.environ.get('NODE1_DOMAIN', 'blockchaininventory1.up.railway.app'),
     2: os.environ.get('NODE2_DOMAIN', 'blockchaininventory2.up.railway.app'),
     3: os.environ.get('NODE3_DOMAIN', 'blockchaininventory3.up.railway.app')
-}"""
+}
+
+app = Flask(__name__)
+CORS(app)
 
 app.logger.setLevel(logging.DEBUG)  # Убедитесь, что уровень логирования установлен на DEBUG
 
