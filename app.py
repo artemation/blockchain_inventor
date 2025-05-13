@@ -1112,10 +1112,33 @@ def view_blockchain():
                             b.confirmed = True
                         db.session.commit()
 
+                    formatted_transactions = []
+                    for transaction in transactions:
+                        formatted_transaction = {}
+                        for key, value in transaction.items():
+                            if key == 'СкладОтправительID':
+                                склад = Склады.query.get(value)
+                                formatted_transaction['СкладОтправитель'] = склад.Название if склад else f"Склад (ID: {value})"
+                            elif key == 'СкладПолучательID':
+                                склад = Склады.query.get(value)
+                                formatted_transaction['СкладПолучатель'] = склад.Название if склад else f"Склад (ID: {value})"
+                            elif key == 'ДокументID':
+                                doc = Тип_документа.query.get(value)
+                                formatted_transaction['Документ'] = doc.Тип_документа if doc else f"Документ (ID: {value})"
+                            elif key == 'ТоварID':
+                                товар = Товары.query.get(value)
+                                formatted_transaction['Товар'] = товар.Наименование if товар else f"Товар (ID: {value})"
+                            elif key == 'Единица_ИзмеренияID':
+                                unit = Единица_измерения.query.get(value)
+                                formatted_transaction['Единица_Измерения'] = unit.Единица_Измерения if unit else f"Ед. изм. (ID: {value})"
+                            else:
+                                formatted_transaction[key] = value
+                        formatted_transactions.append(formatted_transaction)
+                    
                     formatted_blocks.append({
                         'index': index,
                         'timestamp': main_block.timestamp,
-                        'transactions': transactions,
+                        'transactions': formatted_transactions,
                         'previous_hash': main_block.previous_hash,
                         'hash': main_block.hash,
                         'node_id': creator_id,
