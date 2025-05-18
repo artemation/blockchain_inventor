@@ -38,7 +38,8 @@ csrf = CSRFProtect(app)
 CORS(app, resources={r"/receive_block": {"origins": [
     "https://blockchaininventory0.up.railway.app",
     "https://blockchaininventory1.up.railway.app",
-    "https://blockchaininventory2.up.railway.app"
+    "https://blockchaininventory2.up.railway.app",
+    "https://blockchaininventory3.up.railway.app"
 ]}})
 
 app.logger.setLevel(logging.DEBUG)  # Убедитесь, что уровень логирования установлен на DEBUG
@@ -776,7 +777,8 @@ async def receive_block():
 
     block_data = data.get("block")
     sender_id = data.get("sender_id")
-    if not block_data or not sender_id:
+    # Проверяем, что block_data существует и sender_id не None
+    if not block_data or sender_id is None:
         app.logger.error(f"Invalid block data or sender_id: {data}")
         return jsonify({"error": "Invalid block data or sender_id"}), 400
 
