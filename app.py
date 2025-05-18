@@ -22,6 +22,7 @@ from uuid import uuid4
 from flask_cors import CORS
 from flask_session import Session
 import time
+from functools import wraps
 
 load_dotenv()
 
@@ -33,7 +34,8 @@ NODE_DOMAINS = {
 }
 
 app = Flask(__name__)
-CORS(app)
+csrf = CSRFProtect(app)
+CORS(app, resources={r"/receive_block": {"origins": ["https://blockchaininventory0.up.railway.app", "https://blockchaininventory1.up.railway.app", "https://blockchaininventory2.up.railway.app"", "https://blockchaininventory3.up.railway.app"]}})
 
 app.logger.setLevel(logging.DEBUG)  # Убедитесь, что уровень логирования установлен на DEBUG
 
@@ -749,7 +751,17 @@ async def check_node_availability(self, node_id):
         app.logger.error(f"Error checking node {node_id} availability: {e}")
         return False
 
+# Функция для отключения CSRF для определенных маршрутов
+def exempt_from_csrf(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        return f(*args, **kwargs)
+    decorated_function.csrf_exempt = True
+    return decorated_function
+
+# Маршрут receive_block
 @app.route('/receive_block', methods=['POST'])
+@exempt_from_csrf
 async def receive_block():
     app.logger.debug(f"Received block request from node {request.get_json().get('sender_id')}: {request.get_json()}")
     data = request.get_json()
