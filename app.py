@@ -261,50 +261,59 @@ class Node:
 
     # В начале работы узла
     async def sync_blockchain(self):
-        app.logger.info(f"Node {self.node_id} started sync...")
-        app.logger.info(f"Node {self.node_id} starts blockchain sync")
-        
-        try:
-            # Получаем последний локальный блок
+        app.logger.info(f"Node {self.node_id} starting blockchain sync")
+        headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+        longest_chain = None
+        max_length = BlockchainBlock.query.count()
+    
+        for node_id, node in self.nodes.items():
+            if node_id == self.node_id:
+                continue
+            try:
+                async with aiohttp.ClientSession(headers=headers) as session:
+                    url = f"https://{node.host}/get_chain"
+                    app.logger.debug(f"Requesting chain from node {node_id} at {url}")
+                    async with session.get(url, timeout=10) as response:
+                        if response.status == 200:
+                            chain_data = await response.json()
+                            app.logger.debug(f"Received chain from node {node_id}: {chain_data}")
+                            chain_length = len(chain_data.get('chain', []))
+                            if chain_length > max_length:
+                                max_length = chain_length
+                                longest_chain = chain_data.get('chain')
+                        else:
+                            app.logger.error(f"Failed to get chain from node {node_id}: status={response.status}")
+            except Exception as e:
+                app.logger.error(f"Error syncing with node {node_id}: {str(e)}")
+    
+        if longest_chain:
+            app.logger.info(f"Found longer chain with {max_length} blocks, syncing...")
             with app.app_context():
-                local_last_block = BlockchainBlock.query.order_by(BlockchainBlock.index.desc()).first()
-                local_index = local_last_block.index if local_last_block else -1
-            
-            # Запрашиваем высоту блокчейна у других узлов
-            heights = {}
-            for node_id, node in self.nodes.items():
-                if node_id != self.node_id:
+                # Очищаем текущую цепочку
+                BlockchainBlock.query.delete()
+                db.session.commit()
+                # Добавляем блоки из самой длинной цепочки
+                for block in longest_chain:
                     try:
-                        async with aiohttp.ClientSession() as session:
-                            url = f"https://{node.host}/get_blockchain_height"
-                            async with session.get(url, timeout=5) as response:
-                                if response.status == 200:
-                                    data = await response.json()
-                                    heights[node_id] = data.get('height', -1)
+                        new_block = BlockchainBlock(
+                            index=block['index'],
+                            timestamp=datetime.fromisoformat(block['timestamp']),
+                            transactions=json.dumps(block['transactions']),
+                            previous_hash=block['previous_hash'],
+                            hash=block['hash'],
+                            node_id=block.get('node_id', self.node_id),
+                            confirming_node_id=block.get('confirming_node_id', self.node_id),
+                            confirmed=True
+                        )
+                        db.session.add(new_block)
+                        db.session.commit()
+                        app.logger.debug(f"Synced block #{block['index']}")
                     except Exception as e:
-                        app.logger.error(f"Error getting height from node {node_id}: {e}")
-                        continue
-            
-            # Если не получили ответы от других узлов, выходим
-            if not heights:
-                app.logger.warning("No responses from other nodes during sync")
-                return
-            
-            # Находим максимальную высоту
-            max_height = max(heights.values())
-            
-            # Если наш блокчейн короче, синхронизируем недостающие блоки
-            if max_height > local_index:
-                app.logger.info(f"Need to sync from {local_index + 1} to {max_height}")
-                for i in range(local_index + 1, max_height + 1):
-                    # Пытаемся получить блок с каждого узла
-                    for node_id in heights:
-                        if heights[node_id] >= i:
-                            success = await self.request_block_from_node(node_id, i)
-                            if success:
-                                break
-        except Exception as e:
-            app.logger.error(f"Error during blockchain sync: {e}")
+                        app.logger.error(f"Error syncing block #{block.get('index')}: {e}")
+                        db.session.rollback()
+            app.logger.info(f"Node {self.node_id} synced to chain with {max_length} blocks")
+        else:
+            app.logger.info(f"No longer chain found, keeping current chain with {max_length} blocks")
 
     async def request_block_from_node(self, node_id, block_index):
         """Запросить блок с определенным индексом у узла"""
@@ -1952,6 +1961,20 @@ async def receive_confirmation():
     except Exception as e:
         app.logger.error(f"Error processing confirmation: {e}")
         return jsonify({"error": str(e)}), 500
+
+@app.route('/get_chain', methods=['GET'])
+def get_chain():
+    blocks = BlockchainBlock.query.order_by(BlockchainBlock.index.asc()).all()
+    chain = [{
+        'index': block.index,
+        'timestamp': block.timestamp.isoformat(),
+        'transactions': json.loads(block.transactions),
+        'previous_hash': block.previous_hash,
+        'hash': block.hash,
+        'node_id': block.node_id,
+        'confirming_node_id': block.confirming_node_id
+    } for block in blocks]
+    return jsonify({'chain': chain}), 200
 
 def start_sync(node):
     """Запуск синхронизации в отдельном потоке"""
