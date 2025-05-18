@@ -804,32 +804,45 @@ async def check_node_availability(self, node_id):
 
 @app.route('/receive_block', methods=['POST'])
 async def receive_block():
-    app.logger.debug(f"Received block from {sender_id}")
+    app.logger.debug(f"Received block request from node {request.get_json().get('sender_id')}: {request.get_json()}")
     data = request.get_json()
     if not data:
+        app.logger.error("No data in receive_block request")
         return jsonify({"error": "No data"}), 400
 
-    block_data = data["block"]
-    sender_id = data["sender_id"]
+    block_data = data.get("block")
+    sender_id = data.get("sender_id")
+    if not block_data or not sender_id:
+        app.logger.error(f"Invalid block data or sender_id: {data}")
+        return jsonify({"error": "Invalid block data or sender_id"}), 400
 
+    app.logger.debug(f"Processing block #{block_data.get('index')} from node {sender_id}")
+    
     # Проверяем, что блок валиден
     last_block = BlockchainBlock.query.order_by(BlockchainBlock.index.desc()).first()
     if block_data["index"] != (last_block.index + 1 if last_block else 0):
+        app.logger.error(f"Invalid block index: expected {last_block.index + 1 if last_block else 0}, got {block_data['index']}")
         return jsonify({"error": "Invalid block index"}), 400
 
     # Сохраняем блок в БД как подтверждение
-    new_block = BlockchainBlock(
-        index=block_data["index"],
-        timestamp=datetime.fromisoformat(block_data["timestamp"]),
-        transactions=json.dumps(block_data["transactions"]),
-        previous_hash=block_data["previous_hash"],
-        hash=block_data["hash"],
-        node_id=sender_id,  # Кто создал блок
-        confirming_node_id=current_node.node_id,  # Мы подтверждаем
-        confirmed=False
-    )
-    db.session.add(new_block)
-    db.session.commit()
+    try:
+        new_block = BlockchainBlock(
+            index=block_data["index"],
+            timestamp=datetime.fromisoformat(block_data["timestamp"]),
+            transactions=json.dumps(block_data["transactions"]),
+            previous_hash=block_data["previous_hash"],
+            hash=block_data["hash"],
+            node_id=sender_id,
+            confirming_node_id=current_node.node_id,
+            confirmed=False
+        )
+        db.session.add(new_block)
+        db.session.commit()
+        app.logger.info(f"Block #{block_data['index']} from node {sender_id} saved by node {current_node.node_id}")
+    except Exception as e:
+        app.logger.error(f"Error saving block #{block_data.get('index')} from node {sender_id}: {e}")
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
 
     return jsonify({"status": "Block accepted"}), 200
 
