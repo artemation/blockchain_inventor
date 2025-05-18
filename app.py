@@ -35,7 +35,11 @@ NODE_DOMAINS = {
 
 app = Flask(__name__)
 csrf = CSRFProtect(app)
-CORS(app, resources={r"/receive_block": {"origins": ["https://blockchaininventory0.up.railway.app", "https://blockchaininventory1.up.railway.app", "https://blockchaininventory2.up.railway.app"", "https://blockchaininventory3.up.railway.app"]}})
+CORS(app, resources={r"/receive_block": {"origins": [
+    "https://blockchaininventory0.up.railway.app",
+    "https://blockchaininventory1.up.railway.app",
+    "https://blockchaininventory2.up.railway.app"
+]}})
 
 app.logger.setLevel(logging.DEBUG)  # Убедитесь, что уровень логирования установлен на DEBUG
 
