@@ -60,6 +60,7 @@ db_name = os.environ.get('DB_NAME')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL').replace('postgres://', 'postgresql://', 1)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your_default_secret_key')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['WTF_CSRF_ENABLED'] = False
 
 db.init_app(app)
 
@@ -765,7 +766,7 @@ def exempt_from_csrf(f):
 
 # Маршрут receive_block
 @app.route('/receive_block', methods=['POST'])
-@exempt_from_csrf
+@csrf.exempt
 async def receive_block():
     app.logger.debug(f"Received block request from node {request.get_json().get('sender_id')}: {request.get_json()}")
     data = request.get_json()
@@ -781,13 +782,11 @@ async def receive_block():
 
     app.logger.debug(f"Processing block #{block_data.get('index')} from node {sender_id}")
     
-    # Проверяем, что блок валиден
     last_block = BlockchainBlock.query.order_by(BlockchainBlock.index.desc()).first()
     if block_data["index"] != (last_block.index + 1 if last_block else 0):
         app.logger.error(f"Invalid block index: expected {last_block.index + 1 if last_block else 0}, got {block_data['index']}")
         return jsonify({"error": "Invalid block index"}), 400
 
-    # Сохраняем блок в БД как подтверждение
     try:
         new_block = BlockchainBlock(
             index=block_data["index"],
