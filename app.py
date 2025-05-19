@@ -510,7 +510,11 @@ class Node:
             try:
                 with app.app_context():
                     # Проверяем, существует ли блок с таким хэшем
-                    existing_block = db.session.query(BlockchainBlock).filter_by(hash=block.hash, node_id=self.node_id, confirming_node_id=self.node_id).first()
+                    existing_block = db.session.query(BlockchainBlock).filter_by(
+                        hash=block.hash, 
+                        node_id=self.node_id, 
+                        confirming_node_id=self.node_id
+                    ).first()
                     if existing_block:
                         app.logger.info(f"Block #{block.index} already exists in database for node {self.node_id}")
                         existing_block.confirmed = True
@@ -769,90 +773,75 @@ def exempt_from_csrf(f):
 
 # Маршрут receive_block
 @app.route('/receive_block', methods=['POST'])
-@csrf.exempt
 async def receive_block():
-    app.logger.debug(f"Received block request from node {request.get_json().get('sender_id')}: {request.get_json()}")
-    data = request.get_json()
-    if not data:
-        app.logger.error("No data in receive_block request")
-        return jsonify({"error": "No data"}), 400
-
-    block_data = data.get("block")
-    sender_id = data.get("sender_id")
-    if not block_data or sender_id is None:
-        app.logger.error(f"Invalid block data or sender_id: {data}")
-        return jsonify({"error": "Invalid block data or sender_id"}), 400
-
-    app.logger.debug(f"Processing block #{block_data.get('index')} from node {sender_id}")
-
     try:
-        with app.app_context():
-            # Проверяем, существует ли блок с таким индексом
-            existing_block = BlockchainBlock.query.filter_by(
-                index=block_data["index"],
-                node_id=sender_id
-            ).first()
+        data = await request.get_json()
+        app.logger.debug(f"Received block request from node {data['sender_id']}: {data}")
+        sender_id = data['sender_id']
+        block_data = data['block']
 
-            if existing_block:
-                # Если блок существует, проверяем хэш
-                if existing_block.hash == block_data["hash"]:
-                    app.logger.info(f"Block #{block_data['index']} from node {sender_id} already exists with matching hash")
-                    return jsonify({"status": "Block already exists"}), 200
-                else:
-                    app.logger.error(f"Block #{block_data['index']} exists with different hash: {existing_block.hash} != {block_data['hash']}")
-                    return jsonify({"error": "Block exists with different hash"}), 400
+        block_index = block_data['index']
+        block_timestamp = datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00'))
+        block_transactions = block_data['transactions']
+        block_previous_hash = block_data['previous_hash']
+        block_hash = block_data['hash']
 
-            # Проверяем последний блок
-            last_block = BlockchainBlock.query.order_by(BlockchainBlock.index.desc()).first()
-            expected_index = last_block.index + 1 if last_block else 0
-            if block_data["index"] != expected_index:
-                app.logger.error(f"Invalid block index: expected {expected_index}, got {block_data['index']}")
-                return jsonify({"error": f"Invalid block index: expected {expected_index}, got {block_data['index']}"}), 400
+        # Проверяем, существует ли блок
+        existing_block = db.session.query(BlockchainBlock).filter_by(
+            hash=block_hash,
+            node_id=sender_id,
+            confirming_node_id=current_node.node_id
+        ).first()
 
-            # Проверяем previous_hash
-            if last_block and block_data["previous_hash"] != last_block.hash:
-                app.logger.error(f"Invalid previous hash: expected {last_block.hash}, got {block_data['previous_hash']}")
-                return jsonify({"error": "Invalid previous hash"}), 400
-
-            # Проверяем хэш блока
-            block = Block(
-                index=block_data["index"],
-                timestamp=datetime.fromisoformat(block_data["timestamp"].replace('Z', '+00:00')),
-                transactions=block_data["transactions"],
-                previous_hash=block_data["previous_hash"]
-            )
-            if block.hash != block_data["hash"]:
-                app.logger.error(f"Invalid block hash: computed {block.hash}, got {block_data['hash']}")
-                return jsonify({"error": "Invalid block hash"}), 400
-
-            # Проверяем, не существует ли уже подтверждение от этого узла
-            existing_confirmation = BlockchainBlock.query.filter_by(
-                index=block_data["index"],
-                node_id=sender_id,
-                confirming_node_id=NODE_ID
-            ).first()
-            if not existing_confirmation:
-                # Сохраняем подтверждение блока
-                block_db = BlockchainBlock(
-                    index=block_data["index"],
-                    timestamp=datetime.fromisoformat(block_data["timestamp"].replace('Z', '+00:00')),
-                    transactions=json.dumps(block_data["transactions"], ensure_ascii=False),
-                    previous_hash=block_data["previous_hash"],
-                    hash=block_data["hash"],
-                    node_id=sender_id,
-                    confirming_node_id=NODE_ID,
-                    confirmed=True
-                )
-                db.session.add(block_db)
+        if existing_block:
+            app.logger.info(f"Block #{block_index} from node {sender_id} already exists with matching hash")
+            if not existing_block.confirmed:
+                existing_block.confirmed = True
                 db.session.commit()
-                app.logger.info(f"Block #{block_data['index']} confirmed by node {NODE_ID} and saved to database")
+            return jsonify({"status": "Block already exists"}), 200
 
-        app.logger.info(f"Block #{block_data['index']} from node {sender_id} is valid")
+        # Проверяем предыдущий хэш
+        last_block = db.session.query(BlockchainBlock).filter_by(
+            node_id=sender_id,
+            confirming_node_id=current_node.node_id
+        ).order_by(BlockchainBlock.index.desc()).first()
+
+        if last_block and last_block.hash != block_previous_hash:
+            app.logger.error(f"Invalid previous hash for block #{block_index}")
+            return jsonify({"error": "Invalid previous hash"}), 400
+
+        # Проверяем валидность хэша
+        block = Block(
+            index=block_index,
+            timestamp=block_timestamp,
+            transactions=block_transactions,
+            previous_hash=block_previous_hash
+        )
+        computed_hash = block.compute_hash()
+        if computed_hash != block_hash:
+            app.logger.error(f"Invalid hash for block #{block_index}")
+            return jsonify({"error": "Invalid hash"}), 400
+
+        # Сохраняем блок
+        block_db = BlockchainBlock(
+            index=block_index,
+            timestamp=block_timestamp,
+            transactions=json.dumps(block_transactions),
+            previous_hash=block_previous_hash,
+            hash=block_hash,
+            node_id=sender_id,
+            confirmed=True,
+            confirming_node_id=current_node.node_id
+        )
+        db.session.add(block_db)
+        db.session.commit()
+
+        app.logger.info(f"Block #{block_index} confirmed by node {current_node.node_id} and saved to database")
+        app.logger.info(f"Block #{block_index} from node {sender_id} is valid")
         return jsonify({"status": "Block accepted"}), 200
 
     except Exception as e:
-        db.session.rollback()
-        app.logger.error(f"Error processing block #{block_data.get('index')} from node {sender_id}: {e}")
+        app.logger.error(f"Error processing block: {e}")
         return jsonify({"error": str(e)}), 400
 
 
