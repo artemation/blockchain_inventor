@@ -2019,7 +2019,7 @@ def get_block_details(block_index):
 
 
 @app.route('/receive_confirmation', methods=['POST'])
-@csrf.exempt
+
 async def receive_confirmation():
     """Обработчик для приема подтверждений блоков от других узлов"""
     try:
