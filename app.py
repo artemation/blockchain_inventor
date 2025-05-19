@@ -824,11 +824,34 @@ async def receive_block():
                 app.logger.error(f"Invalid block hash: computed {block.hash}, got {block_data['hash']}")
                 return jsonify({"error": "Invalid block hash"}), 400
 
+            # Проверяем, не существует ли уже подтверждение от этого узла
+            existing_confirmation = BlockchainBlock.query.filter_by(
+                index=block_data["index"],
+                node_id=sender_id,
+                confirming_node_id=NODE_ID
+            ).first()
+            if not existing_confirmation:
+                # Сохраняем подтверждение блока
+                block_db = BlockchainBlock(
+                    index=block_data["index"],
+                    timestamp=datetime.fromisoformat(block_data["timestamp"].replace('Z', '+00:00')),
+                    transactions=json.dumps(block_data["transactions"], ensure_ascii=False),
+                    previous_hash=block_data["previous_hash"],
+                    hash=block_data["hash"],
+                    node_id=sender_id,
+                    confirming_node_id=NODE_ID,
+                    confirmed=True
+                )
+                db.session.add(block_db)
+                db.session.commit()
+                app.logger.info(f"Block #{block_data['index']} confirmed by node {NODE_ID} and saved to database")
+
         app.logger.info(f"Block #{block_data['index']} from node {sender_id} is valid")
         return jsonify({"status": "Block accepted"}), 200
 
     except Exception as e:
-        app.logger.error(f"Error validating block #{block_data.get('index')} from node {sender_id}: {e}")
+        db.session.rollback()
+        app.logger.error(f"Error processing block #{block_data.get('index')} from node {sender_id}: {e}")
         return jsonify({"error": str(e)}), 400
 
 
@@ -1101,11 +1124,13 @@ def view_blockchain():
                     confirming_nodes = list({b.confirming_node_id for b in blocks})
                     
                     # Проверяем достижение консенсуса
-                    required_confirmations = (len(nodes) // 3 * 2) + 1
-                    consensus_reached = len(confirming_nodes) >= required_confirmations
+                    total_nodes = len(nodes)
+                    required_confirmations = (total_nodes // 3 * 2) + 1
+                    confirmations_count = len(confirming_nodes)
+                    consensus_reached = confirmations_count >= required_confirmations or any(b.confirmed for b in blocks)
                     
-                    # Обновляем статус подтверждения в БД
-                    if consensus_reached:
+                    # Обновляем статус подтверждения в БД, если консенсус достигнут
+                    if consensus_reached and not all(b.confirmed for b in blocks):
                         for b in blocks:
                             b.confirmed = True
                         db.session.commit()
@@ -1141,8 +1166,8 @@ def view_blockchain():
                         'hash': main_block.hash,
                         'node_id': creator_id,
                         'is_genesis': index == 0,
-                        'confirmations': len(confirming_nodes),
-                        'total_nodes': len(nodes),
+                        'confirmations': confirmations_count,
+                        'total_nodes': total_nodes,
                         'confirming_nodes': confirming_nodes,
                         'consensus_reached': consensus_reached
                     })
