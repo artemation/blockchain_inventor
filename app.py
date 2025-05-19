@@ -466,12 +466,14 @@ class Node:
                 self.applied_transactions.add(sequence_number)
                 await self.apply_transaction(sequence_number, digest)
 
-    async def broadcast_new_block(self, block_data):
-        confirmations = 1
+    async def broadcast_new_block(self, block, new_record, block_db):
+        confirmations = 1  # Считаем подтверждение текущего узла
         confirming_nodes = {self.node_id}
         headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
-        if isinstance(block_data, Block):
-            block_data = block_data.to_dict()
+        if isinstance(block, Block):
+            block_data = block.to_dict()
+        else:
+            block_data = block
         payload = {'sender_id': self.node_id, 'block': block_data}
         app.logger.debug(f"Broadcasting block #{block_data['index']} with payload: {payload}")
     
@@ -488,19 +490,6 @@ class Node:
                         if response.status == 200:
                             confirmations += 1
                             confirming_nodes.add(node_id)
-                            with app.app_context():
-                                confirmation = BlockchainBlock(
-                                    index=block_data['index'],
-                                    timestamp=datetime.fromisoformat(block_data['timestamp']),
-                                    transactions=json.dumps(block_data['transactions']),
-                                    previous_hash=block_data['previous_hash'],
-                                    hash=block_data['hash'],
-                                    node_id=self.node_id,
-                                    confirming_node_id=node_id,
-                                    confirmed=False
-                                )
-                                db.session.add(confirmation)
-                                db.session.commit()
                             app.logger.info(f"Node {node_id} confirmed block #{block_data['index']}")
                         else:
                             app.logger.error(f"Node {node_id} returned status {response.status}: {response_text}")
@@ -510,11 +499,32 @@ class Node:
         required_confirmations = (len(self.nodes) // 3 * 2) + 1
         consensus_reached = confirmations >= required_confirmations
         app.logger.info(f"Consensus check: {confirmations}/{required_confirmations} confirmations")
+    
         if consensus_reached:
             with app.app_context():
-                BlockchainBlock.query.filter_by(index=block_data['index']).update({'confirmed': True})
-                db.session.commit()
-            app.logger.info(f"Consensus reached for block #{block_data['index']}")
+                try:
+                    # Блокировка таблицы для предотвращения конкуренции
+                    db.session.execute(text("LOCK TABLE blockchain_blocks IN EXCLUSIVE MODE"))
+                    
+                    # Проверяем, не был ли блок уже добавлен
+                    existing_block = BlockchainBlock.query.filter_by(index=block_data['index'], hash=block_data['hash']).first()
+                    if existing_block:
+                        app.logger.warning(f"Block #{block_data['index']} already exists in database")
+                        return confirmations, len(self.nodes)
+    
+                    # Сохраняем запись и блок
+                    db.session.add(new_record)
+                    db.session.add(block_db)
+                    db.session.commit()
+                    app.logger.info(f"Block #{block_data['index']} and transaction committed to database")
+                    
+                    # Обновляем статус подтверждения
+                    BlockchainBlock.query.filter_by(index=block_data['index']).update({'confirmed': True})
+                    db.session.commit()
+                except Exception as e:
+                    db.session.rollback()
+                    app.logger.error(f"Error saving block to database: {str(e)}")
+                    return confirmations, len(self.nodes)
         else:
             app.logger.warning(f"Consensus not reached for block #{block_data['index']}")
             await self.sync_blockchain()
@@ -569,16 +579,16 @@ class Node:
 
     async def apply_transaction(self, sequence_number, digest):
         app.logger.debug(f"Applying transaction {sequence_number} with digest {digest}")
-
+    
         request = self.requests.get(sequence_number)
         if not request:
             app.logger.error(f"Request with sequence number {sequence_number} not found.")
             return False, "Request with sequence number not found."
-
+    
         try:
             transaction_data = json.loads(request)
             app.logger.debug(f"Transaction data to apply: {transaction_data}")
-
+    
             with app.app_context():
                 try:
                     # Проверка обязательных полей
@@ -587,15 +597,14 @@ class Node:
                     for field in required_fields:
                         if field not in transaction_data:
                             return False, f"Missing required field: {field}"
-
+    
                     user_id = transaction_data['user_id']
                     if not user_id:
                         return False, "User ID cannot be empty"
-
+    
                     # Нормализация временной метки
                     timestamp = transaction_data.get('timestamp')
                     if isinstance(timestamp, str):
-                        # Если timestamp строка - проверяем валидность
                         try:
                             datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
                             normalized_timestamp = timestamp
@@ -605,7 +614,7 @@ class Node:
                         normalized_timestamp = timestamp.isoformat()
                     else:
                         normalized_timestamp = datetime.now(timezone.utc).isoformat()
-
+    
                     # Подготовка данных для хеширования
                     transaction_for_hash = {
                         'ДокументID': int(transaction_data['ДокументID']),
@@ -617,7 +626,7 @@ class Node:
                         'user_id': int(user_id),
                         'timestamp': normalized_timestamp
                     }
-
+    
                     # Генерация хеша транзакции
                     transaction_string = json.dumps(
                         transaction_for_hash,
@@ -627,7 +636,7 @@ class Node:
                     )
                     transaction_hash = hashlib.sha256(transaction_string.encode('utf-8')).hexdigest()
                     app.logger.info(f"Transaction hash generated: {transaction_hash}")
-
+    
                     # Обновление запасов
                     success, message = update_запасы(
                         transaction_data['СкладПолучательID'],
@@ -636,7 +645,7 @@ class Node:
                     )
                     if not success:
                         return False, message
-
+    
                     # Обработка расхода между разными складами
                     if transaction_data['СкладОтправительID'] != transaction_data['СкладПолучательID']:
                         success, message = update_запасы(
@@ -646,7 +655,7 @@ class Node:
                         )
                         if not success:
                             return False, message
-
+    
                     # Создание записи о транзакции
                     new_record = ПриходРасход(
                         СкладОтправительID=transaction_data['СкладОтправительID'],
@@ -659,17 +668,20 @@ class Node:
                         Timestamp=normalized_timestamp,
                         user_id=user_id
                     )
-
-                    # Создание нового блока
+    
+                    # Проверка актуального последнего блока
                     last_block = BlockchainBlock.query.order_by(BlockchainBlock.index.desc()).first()
+                    expected_index = last_block.index + 1 if last_block else 0
+    
+                    # Создание нового блока
                     new_block = Block(
-                        index=last_block.index + 1 if last_block else 0,
+                        index=expected_index,
                         timestamp=datetime.now(timezone.utc),
                         transactions=[transaction_data],
                         previous_hash=last_block.hash if last_block else '0' * 64
                     )
-
-                    # Сохранение в БД
+    
+                    # Подготовка объекта блока для базы
                     block_db = BlockchainBlock(
                         index=new_block.index,
                         timestamp=new_block.timestamp,
@@ -679,32 +691,23 @@ class Node:
                         node_id=self.node_id,
                         confirming_node_id=self.node_id
                     )
-
-                    db.session.add(new_record)
-                    db.session.add(block_db)
-                    db.session.commit()
-
-                    app.logger.info(f"Transaction {transaction_hash} committed. Block #{new_block.index} added")
-
-                    # Рассылка блока другим узлам
-                    broadcast_success = await self.broadcast_new_block({
-                        'index': new_block.index,
-                        'timestamp': new_block.timestamp.isoformat(),
-                        'transactions': new_block.transactions,
-                        'previous_hash': new_block.previous_hash,
-                        'hash': new_block.hash
-                    })
-
-                    if not broadcast_success:
-                        app.logger.warning("Block broadcast failed, but transaction was committed")
-
-                    return True, "Transaction applied successfully"
-
+    
+                    # Рассылка блока другим узлам, передаем объекты для сохранения
+                    confirmations, total_nodes = await self.broadcast_new_block(new_block, new_record, block_db)
+    
+                    if confirmations >= (total_nodes // 3 * 2) + 1:
+                        app.logger.info(f"Consensus reached for block #{new_block.index}")
+                        return True, "Transaction applied successfully"
+                    else:
+                        app.logger.warning(f"Consensus not reached for block #{new_block.index}")
+                        db.session.rollback()
+                        return False, "Consensus not reached"
+    
                 except Exception as db_error:
                     db.session.rollback()
                     app.logger.error(f"Database error: {str(db_error)}", exc_info=True)
                     return False, f"Database error: {str(db_error)}"
-
+    
         except json.JSONDecodeError as json_error:
             app.logger.error(f"JSON decode error: {str(json_error)}")
             return False, f"Invalid transaction data: {str(json_error)}"
@@ -786,20 +789,25 @@ async def receive_block():
 
     block_data = data.get("block")
     sender_id = data.get("sender_id")
-    # Проверяем, что block_data существует и sender_id не None
     if not block_data or sender_id is None:
         app.logger.error(f"Invalid block data or sender_id: {data}")
         return jsonify({"error": "Invalid block data or sender_id"}), 400
 
     app.logger.debug(f"Processing block #{block_data.get('index')} from node {sender_id}")
-    
-    last_block = BlockchainBlock.query.order_by(BlockchainBlock.index.desc()).first()
-    if block_data["index"] != (last_block.index + 1 if last_block else 0):
-        app.logger.error(f"Invalid block index: expected {last_block.index + 1 if last_block else 0}, got {block_data['index']}")
-        return jsonify({"error": "Invalid block index"}), 400
 
+    # Проверяем, что блок еще не подтвержден этим узлом
+    existing_confirmation = BlockchainBlock.query.filter_by(
+        index=block_data["index"],
+        node_id=sender_id,
+        confirming_node_id=current_node.node_id
+    ).first()
+    if existing_confirmation:
+        app.logger.info(f"Block #{block_data['index']} already confirmed by node {current_node.node_id}")
+        return jsonify({"status": "Block already confirmed"}), 200
+
+    # Создаем запись подтверждения
     try:
-        new_block = BlockchainBlock(
+        confirmation = BlockchainBlock(
             index=block_data["index"],
             timestamp=datetime.fromisoformat(block_data["timestamp"]),
             transactions=json.dumps(block_data["transactions"]),
@@ -809,11 +817,11 @@ async def receive_block():
             confirming_node_id=current_node.node_id,
             confirmed=False
         )
-        db.session.add(new_block)
+        db.session.add(confirmation)
         db.session.commit()
-        app.logger.info(f"Block #{block_data['index']} from node {sender_id} saved by node {current_node.node_id}")
+        app.logger.info(f"Confirmation for block #{block_data['index']} from node {sender_id} saved by node {current_node.node_id}")
     except Exception as e:
-        app.logger.error(f"Error saving block #{block_data.get('index')} from node {sender_id}: {e}")
+        app.logger.error(f"Error saving confirmation for block #{block_data.get('index')} from node {sender_id}: {e}")
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
 
