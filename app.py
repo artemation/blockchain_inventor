@@ -466,71 +466,57 @@ class Node:
                 self.applied_transactions.add(sequence_number)
                 await self.apply_transaction(sequence_number, digest)
 
-    async def broadcast_new_block(self, block, new_record, block_db):
-        confirmations = 1  # Считаем подтверждение текущего узла
-        confirming_nodes = {self.node_id}
-        headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
-        if isinstance(block, Block):
-            block_data = block.to_dict()
-        else:
-            block_data = block
-        payload = {'sender_id': self.node_id, 'block': block_data}
-        app.logger.debug(f"Broadcasting block #{block_data['index']} with payload: {payload}")
-    
-        for node_id, node in self.nodes.items():
-            if node_id == self.node_id:
-                continue
-            try:
-                async with aiohttp.ClientSession(headers=headers) as session:
-                    url = f"https://{node.host}/receive_block"
-                    app.logger.debug(f"Sending POST to node {node_id} at {url}")
-                    async with session.post(url, json=payload, timeout=10) as response:
-                        response_text = await response.text()
-                        app.logger.debug(f"Response from node {node_id}: status={response.status}, body={response_text}")
-                        if response.status == 200:
-                            confirmations += 1
-                            confirming_nodes.add(node_id)
-                            app.logger.info(f"Node {node_id} confirmed block #{block_data['index']}")
-                        else:
-                            app.logger.error(f"Node {node_id} returned status {response.status}: {response_text}")
-            except Exception as e:
-                app.logger.error(f"Error broadcasting to node {node_id}: {str(e)}")
-    
-        # Формула консенсуса для PBFT: 2f+1, где f = (N-1)/3
+    async def broadcast_new_block(self, block, transaction_record, block_db):
         total_nodes = len(self.nodes) + 1  # Включаем текущий узел
         f = (total_nodes - 1) // 3
         required_confirmations = 2 * f + 1
-        consensus_reached = confirmations >= required_confirmations
+        confirmations = 1  # Считаем текущий узел
+    
+        app.logger.debug(f"Broadcasting block #{block.index} with payload: {block.__dict__}")
+    
+        tasks = []
+        for node_id, domain in self.nodes.items():
+            if node_id != self.node_id:
+                url = f"https://{domain}/receive_block"
+                payload = {
+                    "sender_id": self.node_id,
+                    "block": block.__dict__
+                }
+                app.logger.debug(f"Sending POST to node {node_id} at {url}")
+                tasks.append(self.send_post_request(node_id, url, payload))
+    
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+        for node_id, response in responses:
+            if isinstance(response, Exception):
+                app.logger.error(f"Error sending to node {node_id}: {response}")
+                continue
+            try:
+                status, body = response
+                app.logger.debug(f"Response from node {node_id}: status={status}, body={body}")
+                if status == 200 and (body.get("status") in ["Block accepted", "Block already exists"]):
+                    confirmations += 1
+                    app.logger.info(f"Node {node_id} confirmed block #{block.index}")
+                else:
+                    app.logger.error(f"Node {node_id} returned status {status}: {body}")
+            except Exception as e:
+                app.logger.error(f"Error processing response from node {node_id}: {e}")
+    
         app.logger.info(f"Consensus check: {confirmations}/{required_confirmations} confirmations (total nodes: {total_nodes}, f: {f})")
-    
-        if consensus_reached:
-            with app.app_context():
-                try:
-                    # Блокировка таблицы для предотвращения конкуренции
-                    db.session.execute(text("LOCK TABLE blockchain_blocks IN EXCLUSIVE MODE"))
-                    
-                    # Проверяем, не был ли блок уже добавлен
-                    existing_block = BlockchainBlock.query.filter_by(index=block_data['index'], hash=block_data['hash']).first()
-                    if existing_block:
-                        app.logger.warning(f"Block #{block_data['index']} already exists in database")
-                        return confirmations, total_nodes
-    
-                    # Сохраняем запись и блок
-                    db.session.add(new_record)
+        if confirmations >= required_confirmations:
+            try:
+                with app.app_context():
+                    db.session.add(transaction_record)
                     db.session.add(block_db)
+                    block_db.confirmed = True
                     db.session.commit()
-                    app.logger.info(f"Block #{block_data['index']} and transaction committed to database")
-                    
-                    # Обновляем статус подтверждения
-                    BlockchainBlock.query.filter_by(index=block_data['index'], hash=block_data['hash']).update({'confirmed': True})
-                    db.session.commit()
-                except Exception as e:
-                    db.session.rollback()
-                    app.logger.error(f"Error saving block to database: {str(e)}")
-                    return confirmations, total_nodes
+                    app.logger.info(f"Block #{block.index} and transaction committed to database")
+            except Exception as e:
+                db.session.rollback()
+                app.logger.error(f"Database error: {e}")
+                return confirmations, total_nodes
         else:
-            app.logger.warning(f"Consensus not reached for block #{block_data['index']}")
-            await self.sync_blockchain()
+            app.logger.warning(f"Consensus not reached for block #{block.index}")
+            db.session.rollback()
     
         return confirmations, total_nodes
 
@@ -799,9 +785,24 @@ async def receive_block():
 
     app.logger.debug(f"Processing block #{block_data.get('index')} from node {sender_id}")
 
-    # Проверяем валидность блока
     try:
         with app.app_context():
+            # Проверяем, существует ли блок с таким индексом
+            existing_block = BlockchainBlock.query.filter_by(
+                index=block_data["index"],
+                node_id=sender_id
+            ).first()
+
+            if existing_block:
+                # Если блок существует, проверяем хэш
+                if existing_block.hash == block_data["hash"]:
+                    app.logger.info(f"Block #{block_data['index']} from node {sender_id} already exists with matching hash")
+                    return jsonify({"status": "Block already exists"}), 200
+                else:
+                    app.logger.error(f"Block #{block_data['index']} exists with different hash: {existing_block.hash} != {block_data['hash']}")
+                    return jsonify({"error": "Block exists with different hash"}), 400
+
+            # Проверяем последний блок
             last_block = BlockchainBlock.query.order_by(BlockchainBlock.index.desc()).first()
             expected_index = last_block.index + 1 if last_block else 0
             if block_data["index"] != expected_index:
