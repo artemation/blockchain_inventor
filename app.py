@@ -69,6 +69,14 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
+# Функция для отключения CSRF для определенных маршрутов
+def exempt_from_csrf(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        return f(*args, **kwargs)
+    decorated_function.csrf_exempt = True
+    return decorated_function
+
 @login_manager.user_loader
 def load_user(user_id):
     return db.session.execute(select(User).filter_by(id=user_id)).scalar_one_or_none()
@@ -79,6 +87,7 @@ def health_check():
 
 
 @app.route('/get_blockchain_height')
+@exempt_from_csrf
 def get_blockchain_height():
     """Вернуть высоту (индекс последнего блока) блокчейна"""
     try:
@@ -91,6 +100,7 @@ def get_blockchain_height():
 
 
 @app.route('/get_block/<int:block_index>')
+@exempt_from_csrf
 def get_block(block_index):
     """Вернуть блок с указанным индексом"""
     try:
@@ -827,10 +837,9 @@ async def check_node_availability(self, node_id):
         app.logger.error(f"Error checking node {node_id} availability: {e}")
         return False
 
-
-
 # Маршрут receive_block
 @app.route('/receive_block', methods=['POST'])
+@exempt_from_csrf
 async def receive_block():
     try:
         data = await request.get_json()
