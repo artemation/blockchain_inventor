@@ -34,13 +34,7 @@ NODE_DOMAINS = {
 }
 
 app = Flask(__name__)
-csrf = CSRFProtect(app)
-CORS(app, resources={r"/receive_block": {"origins": [
-    "https://blockchaininventory0.up.railway.app",
-    "https://blockchaininventory1.up.railway.app",
-    "https://blockchaininventory2.up.railway.app",
-    "https://blockchaininventory3.up.railway.app"
-]}})
+CORS(app)
 
 app.logger.setLevel(logging.DEBUG)  # Убедитесь, что уровень логирования установлен на DEBUG
 
@@ -70,12 +64,7 @@ login_manager.init_app(app)
 login_manager.login_view = 'login'
 
 # Функция для отключения CSRF для определенных маршрутов
-def exempt_from_csrf(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        return f(*args, **kwargs)
-    decorated_function.csrf_exempt = True
-    return decorated_function
+
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -87,7 +76,7 @@ def health_check():
 
 
 @app.route('/get_blockchain_height')
-@exempt_from_csrf
+
 def get_blockchain_height():
     """Вернуть высоту (индекс последнего блока) блокчейна"""
     try:
@@ -100,7 +89,7 @@ def get_blockchain_height():
 
 
 @app.route('/get_block/<int:block_index>')
-@exempt_from_csrf
+
 def get_block(block_index):
     """Вернуть блок с указанным индексом"""
     try:
@@ -439,6 +428,11 @@ class Node:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
                 async with session.post(url, json=payload) as response:
                     status = response.status
+                    content_type = response.headers.get('Content-Type', '')
+                    if 'application/json' not in content_type:
+                        body = await response.text()
+                        app.logger.error(f"Node {node_id} returned non-JSON response: status={status}, content-type={content_type}, body={body[:500]}")
+                        return node_id, (status, {"error": "Non-JSON response", "body": body[:500]})
                     body = await response.json()
                     return node_id, (status, body)
         except Exception as e:
@@ -818,9 +812,6 @@ for i in range(4):
     )
 current_node = nodes[NODE_ID]
 
-with app.app_context():
-    csrf = CSRFProtect(app)
-
 def serialize_data(data):
     return json.dumps(data, ensure_ascii=False, sort_keys=True)
 
@@ -839,7 +830,7 @@ async def check_node_availability(self, node_id):
 
 # Маршрут receive_block
 @app.route('/receive_block', methods=['POST'])
-@exempt_from_csrf
+
 async def receive_block():
     try:
         data = await request.get_json()
