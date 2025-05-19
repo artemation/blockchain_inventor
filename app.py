@@ -483,7 +483,15 @@ class Node:
         required_confirmations = 2 * f + 1
         confirmations = 1  # Считаем текущий узел
     
-        app.logger.debug(f"Broadcasting block #{block.index} with payload: {block.__dict__}")
+        # Преобразуем блок в JSON-сериализуемый формат
+        block_dict = {
+            'index': block.index,
+            'timestamp': block.timestamp.isoformat(),  # Конвертируем datetime в строку
+            'transactions': block.transactions,  # Транзакции уже в виде списка словарей
+            'previous_hash': block.previous_hash,
+            'hash': block.hash
+        }
+        app.logger.debug(f"Broadcasting block #{block.index} with payload: {block_dict}")
     
         tasks = []
         for node_id, domain in self.nodes.items():
@@ -491,9 +499,9 @@ class Node:
                 url = f"https://{domain}/receive_block"
                 payload = {
                     "sender_id": self.node_id,
-                    "block": block.__dict__
+                    "block": block_dict
                 }
-                app.logger.debug(f"Sending POST to node {node_id} at {url}")
+                app.logger.debug(f"Sending POST to node {node_id} at {url} with payload: {payload}")
                 tasks.append(self.send_post_request(node_id, url, payload))
     
         responses = await asyncio.gather(*tasks, return_exceptions=True)
