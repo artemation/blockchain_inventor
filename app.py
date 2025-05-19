@@ -346,33 +346,18 @@ class Node:
         except Exception as e:
             app.logger.error(f"Error requesting block {block_index} from node {node_id}: {e}")
 
-    async def send_message(self, recipient_id, message_type, data):
-        try:
-            recipient = self.nodes.get(recipient_id)
-            if not recipient:
-                app.logger.error(f"Recipient node {recipient_id} not found in nodes list")
-                return False
-            host = recipient.host
-            port = recipient.port
-            async with aiohttp.ClientSession() as session:
-                url = f"https://{host}:{port}/node_message"
-                payload = {
-                    'sender_id': self.node_id,
-                    'message_type': message_type,
-                    'data': data
-                }
-                app.logger.debug(f"Sending {message_type} to node {recipient_id} at {url}")
-
-                async with session.post(url, json=payload, headers={'Content-Type': 'application/json'}) as response:
-                    if response.status == 200:
-                        app.logger.debug(f"Message sent successfully to node {recipient_id}")
-                        return True
-                    else:
-                        app.logger.error(f"Failed to send message to node {recipient_id}, status: {response.status}")
-                        return False
-        except Exception as e:
-            app.logger.error(f"Exception in send_message to node {recipient_id}: {e}")
-            return False
+    async def send_message(self, message):
+        tasks = []
+        for node_id, domain in self.nodes.items():
+            if node_id != self.node_id:
+                url = f"https://{domain}/receive_message"
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(url, json=message, timeout=5) as response:
+                            app.logger.debug(f"Sent message to node {node_id}: {message['message_type']}")
+                except Exception as e:
+                    app.logger.error(f"Exception in send_message to node {node_id}: {e}")
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     async def send_post_request(self, node_id, url, payload):
         try:
@@ -486,8 +471,8 @@ class Node:
         # Преобразуем блок в JSON-сериализуемый формат
         block_dict = {
             'index': block.index,
-            'timestamp': block.timestamp.isoformat(),  # Конвертируем datetime в строку
-            'transactions': block.transactions,  # Транзакции уже в виде списка словарей
+            'timestamp': block.timestamp.isoformat(),
+            'transactions': block.transactions,
             'previous_hash': block.previous_hash,
             'hash': block.hash
         }
@@ -524,9 +509,15 @@ class Node:
         if confirmations >= required_confirmations:
             try:
                 with app.app_context():
-                    db.session.add(transaction_record)
-                    db.session.add(block_db)
-                    block_db.confirmed = True
+                    # Проверяем, существует ли блок с таким хэшем
+                    existing_block = db.session.query(BlockchainBlock).filter_by(hash=block.hash, node_id=self.node_id, confirming_node_id=self.node_id).first()
+                    if existing_block:
+                        app.logger.info(f"Block #{block.index} already exists in database for node {self.node_id}")
+                        existing_block.confirmed = True
+                    else:
+                        db.session.add(transaction_record)
+                        db.session.add(block_db)
+                        block_db.confirmed = True
                     db.session.commit()
                     app.logger.info(f"Block #{block.index} and transaction committed to database")
             except Exception as e:
@@ -1107,43 +1098,45 @@ def view_blockchain():
         ).distinct().order_by(BlockchainBlock.index).all()
 
         formatted_blocks = []
+        total_nodes = len(nodes) + 1  # Учитываем текущий узел
+
         for index in block_indices:
             index = index[0]
             
-            # Получаем все подтверждения для этого блока
+            # Получаем все подтверждения для этого блока (без фильтра по node_id)
             confirmations = BlockchainBlock.query.filter_by(index=index).all()
             
             if not confirmations:
                 continue
 
-            # Группируем по node_id (создателям блоков)
-            blocks_by_creator = {}
+            # Группируем по хэшу блока, чтобы обрабатывать блоки с одинаковым содержимым
+            blocks_by_hash = {}
             for conf in confirmations:
-                if conf.node_id not in blocks_by_creator:
-                    blocks_by_creator[conf.node_id] = []
-                blocks_by_creator[conf.node_id].append(conf)
+                if conf.hash not in blocks_by_hash:
+                    blocks_by_hash[conf.hash] = []
+                blocks_by_hash[conf.hash].append(conf)
 
-            # Для каждого создателя блока создаем запись
-            for creator_id, blocks in blocks_by_creator.items():
+            # Для каждого уникального хэша создаем запись
+            for block_hash, blocks in blocks_by_hash.items():
                 main_block = blocks[0]
                 
                 try:
                     transactions = json.loads(main_block.transactions)
                     
                     # Получаем список уникальных узлов, подтвердивших этот блок
-                    confirming_nodes = list({b.confirming_node_id for b in blocks})
+                    confirming_nodes = list({b.confirming_node_id for b in blocks if b.confirmed})
+                    confirmations_count = len(confirming_nodes)
                     
                     # Проверяем достижение консенсуса
-                    total_nodes = len(nodes)
                     required_confirmations = (total_nodes // 3 * 2) + 1
-                    confirmations_count = len(confirming_nodes)
-                    consensus_reached = confirmations_count >= required_confirmations or any(b.confirmed for b in blocks)
+                    consensus_reached = confirmations_count >= required_confirmations
                     
                     # Обновляем статус подтверждения в БД, если консенсус достигнут
                     if consensus_reached and not all(b.confirmed for b in blocks):
                         for b in blocks:
                             b.confirmed = True
                         db.session.commit()
+                        app.logger.debug(f"Updated confirmed status for block #{index} with hash {block_hash}")
 
                     formatted_transactions = []
                     for transaction in transactions:
@@ -1174,7 +1167,7 @@ def view_blockchain():
                         'transactions': formatted_transactions,
                         'previous_hash': main_block.previous_hash,
                         'hash': main_block.hash,
-                        'node_id': creator_id,
+                        'node_id': main_block.node_id,
                         'is_genesis': index == 0,
                         'confirmations': confirmations_count,
                         'total_nodes': total_nodes,
@@ -1185,6 +1178,7 @@ def view_blockchain():
                     app.logger.error(f"Error decoding transactions for block {index}: {e}")
                     continue
 
+        app.logger.debug(f"Loaded {len(formatted_blocks)} blocks from database")
         return render_template('blockchain.html', blocks=formatted_blocks)
     except Exception as e:
         app.logger.error(f"Error in view_blockchain: {e}")
