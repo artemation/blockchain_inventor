@@ -496,9 +496,12 @@ class Node:
             except Exception as e:
                 app.logger.error(f"Error broadcasting to node {node_id}: {str(e)}")
     
-        required_confirmations = (len(self.nodes) // 3 * 2) + 1
+        # Формула консенсуса для PBFT: 2f+1, где f = (N-1)/3
+        total_nodes = len(self.nodes) + 1  # Включаем текущий узел
+        f = (total_nodes - 1) // 3
+        required_confirmations = 2 * f + 1
         consensus_reached = confirmations >= required_confirmations
-        app.logger.info(f"Consensus check: {confirmations}/{required_confirmations} confirmations")
+        app.logger.info(f"Consensus check: {confirmations}/{required_confirmations} confirmations (total nodes: {total_nodes}, f: {f})")
     
         if consensus_reached:
             with app.app_context():
@@ -510,7 +513,7 @@ class Node:
                     existing_block = BlockchainBlock.query.filter_by(index=block_data['index'], hash=block_data['hash']).first()
                     if existing_block:
                         app.logger.warning(f"Block #{block_data['index']} already exists in database")
-                        return confirmations, len(self.nodes)
+                        return confirmations, total_nodes
     
                     # Сохраняем запись и блок
                     db.session.add(new_record)
@@ -519,17 +522,17 @@ class Node:
                     app.logger.info(f"Block #{block_data['index']} and transaction committed to database")
                     
                     # Обновляем статус подтверждения
-                    BlockchainBlock.query.filter_by(index=block_data['index']).update({'confirmed': True})
+                    BlockchainBlock.query.filter_by(index=block_data['index'], hash=block_data['hash']).update({'confirmed': True})
                     db.session.commit()
                 except Exception as e:
                     db.session.rollback()
                     app.logger.error(f"Error saving block to database: {str(e)}")
-                    return confirmations, len(self.nodes)
+                    return confirmations, total_nodes
         else:
             app.logger.warning(f"Consensus not reached for block #{block_data['index']}")
             await self.sync_blockchain()
     
-        return confirmations, len(self.nodes)
+        return confirmations, total_nodes
 
     # Проверка доступности узла
     async def check_node_availability(self, node_id):
@@ -689,13 +692,14 @@ class Node:
                         previous_hash=new_block.previous_hash,
                         hash=new_block.hash,
                         node_id=self.node_id,
-                        confirming_node_id=self.node_id
+                        confirming_node_id=self.node_id,
+                        confirmed=False  # Изначально неподтвержден
                     )
     
                     # Рассылка блока другим узлам, передаем объекты для сохранения
                     confirmations, total_nodes = await self.broadcast_new_block(new_block, new_record, block_db)
     
-                    if confirmations >= (total_nodes // 3 * 2) + 1:
+                    if confirmations >= ((total_nodes - 1) // 3 * 2) + 1:
                         app.logger.info(f"Consensus reached for block #{new_block.index}")
                         return True, "Transaction applied successfully"
                     else:
@@ -795,37 +799,37 @@ async def receive_block():
 
     app.logger.debug(f"Processing block #{block_data.get('index')} from node {sender_id}")
 
-    # Проверяем, что блок еще не подтвержден этим узлом
-    existing_confirmation = BlockchainBlock.query.filter_by(
-        index=block_data["index"],
-        node_id=sender_id,
-        confirming_node_id=current_node.node_id
-    ).first()
-    if existing_confirmation:
-        app.logger.info(f"Block #{block_data['index']} already confirmed by node {current_node.node_id}")
-        return jsonify({"status": "Block already confirmed"}), 200
-
-    # Создаем запись подтверждения
+    # Проверяем валидность блока
     try:
-        confirmation = BlockchainBlock(
-            index=block_data["index"],
-            timestamp=datetime.fromisoformat(block_data["timestamp"]),
-            transactions=json.dumps(block_data["transactions"]),
-            previous_hash=block_data["previous_hash"],
-            hash=block_data["hash"],
-            node_id=sender_id,
-            confirming_node_id=current_node.node_id,
-            confirmed=False
-        )
-        db.session.add(confirmation)
-        db.session.commit()
-        app.logger.info(f"Confirmation for block #{block_data['index']} from node {sender_id} saved by node {current_node.node_id}")
-    except Exception as e:
-        app.logger.error(f"Error saving confirmation for block #{block_data.get('index')} from node {sender_id}: {e}")
-        db.session.rollback()
-        return jsonify({"error": str(e)}), 500
+        with app.app_context():
+            last_block = BlockchainBlock.query.order_by(BlockchainBlock.index.desc()).first()
+            expected_index = last_block.index + 1 if last_block else 0
+            if block_data["index"] != expected_index:
+                app.logger.error(f"Invalid block index: expected {expected_index}, got {block_data['index']}")
+                return jsonify({"error": f"Invalid block index: expected {expected_index}, got {block_data['index']}"}), 400
 
-    return jsonify({"status": "Block accepted"}), 200
+            # Проверяем previous_hash
+            if last_block and block_data["previous_hash"] != last_block.hash:
+                app.logger.error(f"Invalid previous hash: expected {last_block.hash}, got {block_data['previous_hash']}")
+                return jsonify({"error": "Invalid previous hash"}), 400
+
+            # Проверяем хэш блока
+            block = Block(
+                index=block_data["index"],
+                timestamp=datetime.fromisoformat(block_data["timestamp"].replace('Z', '+00:00')),
+                transactions=block_data["transactions"],
+                previous_hash=block_data["previous_hash"]
+            )
+            if block.hash != block_data["hash"]:
+                app.logger.error(f"Invalid block hash: computed {block.hash}, got {block_data['hash']}")
+                return jsonify({"error": "Invalid block hash"}), 400
+
+        app.logger.info(f"Block #{block_data['index']} from node {sender_id} is valid")
+        return jsonify({"status": "Block accepted"}), 200
+
+    except Exception as e:
+        app.logger.error(f"Error validating block #{block_data.get('index')} from node {sender_id}: {e}")
+        return jsonify({"error": str(e)}), 400
 
 
 async def broadcast_confirmation(block_index, creator_node_id, confirming_node_id):
@@ -1971,18 +1975,21 @@ async def receive_confirmation():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/get_chain', methods=['GET'])
-def get_chain():
-    blocks = BlockchainBlock.query.order_by(BlockchainBlock.index.asc()).all()
-    chain = [{
-        'index': block.index,
-        'timestamp': block.timestamp.isoformat(),
-        'transactions': json.loads(block.transactions),
-        'previous_hash': block.previous_hash,
-        'hash': block.hash,
-        'node_id': block.node_id,
-        'confirming_node_id': block.confirming_node_id
-    } for block in blocks]
-    return jsonify({'chain': chain}), 200
+async def get_chain():
+    with app.app_context():
+        chain = BlockchainBlock.query.filter_by(confirmed=True).order_by(BlockchainBlock.index.asc()).all()
+        chain_data = [
+            {
+                'index': block.index,
+                'timestamp': block.timestamp.isoformat(),
+                'transactions': json.loads(block.transactions),
+                'previous_hash': block.previous_hash,
+                'hash': block.hash,
+                'node_id': block.node_id,
+                'confirming_node_id': block.confirming_node_id
+            } for block in chain
+        ]
+        return jsonify({'chain': chain_data})
 
 def start_sync(node):
     """Запуск синхронизации в отдельном потоке"""
