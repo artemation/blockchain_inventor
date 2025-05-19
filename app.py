@@ -374,6 +374,17 @@ class Node:
             app.logger.error(f"Exception in send_message to node {recipient_id}: {e}")
             return False
 
+    async def send_post_request(self, node_id, url, payload):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, timeout=10) as response:
+                    status = response.status
+                    body = await response.json()
+                    return node_id, (status, body)
+        except Exception as e:
+            app.logger.error(f"Error sending POST to node {node_id} at {url}: {e}")
+            return node_id, e
+    
     async def receive_message(self, message):
         app.logger.debug(f"Node {self.node_id} received: {message}")
         print(f"Node {self.node_id} received: {message}")
@@ -719,26 +730,16 @@ PORT = int(os.environ.get('PORT', 5000))
 DOMAIN_PREFIX = os.environ.get('DOMAIN_PREFIX', '')
 
 
+# Создаем узлы блокчейна
 nodes = {}
 for i in range(4):
     nodes[i] = Node(
         node_id=i,
-        nodes={
-            j: Node(  # Создаем объекты Node для других узлов
-                node_id=j,
-                nodes={},  # Пустой словарь, так как он будет заполнен позже
-                host=NODE_DOMAINS[j],
-                port=443  # Railway использует 443 для HTTPS
-            ) for j in range(4) if j != i
-        },
-        host=NODE_DOMAINS[i],  # Используем домен из переменных окружения
-        port=443  # Railway использует 443 для HTTPS
+        nodes={j: NODE_DOMAINS[j] for j in range(4) if j != i},  # Используем строки доменов
+        host=NODE_DOMAINS[i],
+        port=443
     )
 current_node = nodes[NODE_ID]
-
-
-for node_id, node in nodes.items():
-    node.nodes = {k: v for k, v in nodes.items() if k != node_id}
 
 with app.app_context():
     csrf = CSRFProtect(app)
