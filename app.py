@@ -215,7 +215,7 @@ class Block:
 
 class Node:
     async def check_consensus(self, block, sender_id):
-        confirmations = [sender_id]  # Считаем, что отправитель уже подтверждает блок
+        confirmations = [sender_id]
         tasks = []
         
         for node_id, domain in self.nodes.items():
@@ -241,6 +241,8 @@ class Node:
             elif result:
                 confirmations.append(node_id)
                 app.logger.info(f"Node {node_id} confirmed block #{block.index}")
+            else:
+                app.logger.warning(f"Node {node_id} rejected block #{block.index}")
         
         return confirmations
     
@@ -496,6 +498,9 @@ class Node:
 
     async def send_post_request(self, node_id, url, payload):
         try:
+            if not isinstance(payload, dict):
+                app.logger.error(f"Invalid payload type for node {node_id}: {type(payload)}")
+                return node_id, Exception("Invalid payload type")
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
                 async with session.post(url, json=payload) as response:
                     status = response.status
@@ -900,7 +905,7 @@ async def check_node_availability(self, node_id):
 @app.route('/receive_block', methods=['POST'])
 @csrf.exempt
 async def receive_block():
-    data = await request.get_json()
+    data = request.get_json()  # Убрали await
     app.logger.debug(f"Received block request from node {data.get('sender_id')}: {data}")
     sender_id = data.get('sender_id')
     block_data = data.get('block')
@@ -930,7 +935,9 @@ async def receive_block():
         block.hash = block_data['hash']
         
         # Проверяем валидность блока
-        if not node.is_valid_new_block(block, node.get_previous_block()):
+        # Заменяем несуществующую функцию is_valid_new_block
+        last_block = db.session.query(BlockchainBlock).filter_by(node_id=sender_id).order_by(BlockchainBlock.index.desc()).first()
+        if last_block and (block.previous_hash != last_block.hash or block.index != last_block.index + 1):
             app.logger.error(f"Invalid block #{block_data['index']} from node {sender_id}")
             return jsonify({'error': 'Invalid block'}), 400
         
@@ -942,7 +949,7 @@ async def receive_block():
             previous_hash=block.previous_hash,
             hash=block.hash,
             node_id=sender_id,
-            confirming_node_id=node.node_id,
+            confirming_node_id=NODE_ID,  # Текущий узел подтверждает
             confirmed=True
         )
         db.session.add(block_db)
@@ -955,7 +962,7 @@ async def receive_block():
         if len(confirmations) >= required_confirmations:
             try:
                 db.session.commit()
-                app.logger.info(f"Block #{block.index} confirmed by node {node.node_id}")
+                app.logger.info(f"Block #{block.index} confirmed by node {NODE_ID}")
                 return jsonify({'status': 'Block accepted'}), 200
             except sqlalchemy.exc.IntegrityError as e:
                 db.session.rollback()
