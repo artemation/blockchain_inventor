@@ -214,6 +214,49 @@ class Block:
         return block
 
 class Node:
+    async def check_consensus(self, block, sender_id):
+        confirmations = [sender_id]  # Считаем, что отправитель уже подтверждает блок
+        tasks = []
+        
+        for node_id, domain in self.nodes.items():
+            if node_id != self.node_id and node_id != sender_id:
+                url = f"https://{domain}/receive_block"
+                data = {
+                    'sender_id': sender_id,
+                    'block': {
+                        'index': block.index,
+                        'timestamp': block.timestamp.isoformat(),
+                        'transactions': block.transactions,
+                        'previous_hash': block.previous_hash,
+                        'hash': block.hash
+                    }
+                }
+                tasks.append(self._send_block_confirmation(url, data, node_id))
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for node_id, result in results:
+            if isinstance(result, Exception):
+                app.logger.error(f"Node {node_id} failed to confirm block #{block.index}: {result}")
+            elif result:
+                confirmations.append(node_id)
+                app.logger.info(f"Node {node_id} confirmed block #{block.index}")
+        
+        return confirmations
+    
+    async def _send_block_confirmation(self, url, data, node_id):
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
+                async with session.post(url, json=data) as response:
+                    if response.status == 200:
+                        return node_id, True
+                    else:
+                        app.logger.error(f"Node {node_id} rejected block: {await response.text()}")
+                        return node_id, False
+        except Exception as e:
+            return node_id, e    
+    
+    
     genesis_lock = Lock()
 
     def __init__(self, node_id, nodes, host, port):
@@ -235,42 +278,55 @@ class Node:
 
     
     def create_genesis_block(self):
-        with app.app_context():
-            with self.genesis_lock:  # Используем блокировку
-                existing_genesis = db.session.query(BlockchainBlock).filter_by(index=0, node_id=self.node_id).first()
-                if existing_genesis:
-                    app.logger.info(f"Node {self.node_id}: Genesis block already exists")
-                    return Block(
+            with app.app_context():
+                with self.genesis_lock:  # Используем блокировку
+                    existing_genesis = db.session.query(BlockchainBlock).filter_by(index=0, node_id=self.node_id).first()
+                    if existing_genesis:
+                        app.logger.info(f"Node {self.node_id}: Genesis block already exists")
+                        return Block(
+                            index=0,
+                            timestamp=existing_genesis.timestamp,
+                            transactions=json.loads(existing_genesis.transactions),
+                            previous_hash=existing_genesis.previous_hash
+                        )
+                    
+                    # Создание нового генезис-блока
+                    genesis = Block(
                         index=0,
-                        timestamp=existing_genesis.timestamp,
-                        transactions=json.loads(existing_genesis.transactions),
-                        previous_hash=existing_genesis.previous_hash
+                        timestamp=datetime(2025, 1, 1, tzinfo=timezone.utc),
+                        transactions=[{"message": "Genesis Block", "timestamp": "2025-01-01T00:00:00+00:00"}],
+                        previous_hash="0"
                     )
-                
-                # Создание нового генезис-блока
-                genesis = Block(
-                    index=0,
-                    timestamp=datetime(2025, 1, 1, tzinfo=timezone.utc),
-                    transactions=[{"message": "Genesis Block", "timestamp": "2025-01-01T00:00:00+00:00"}],
-                    previous_hash="0"
-                )
-                genesis.hash = genesis.calculate_hash()
-                
-                # Сохранение в базе данных
-                genesis_db = BlockchainBlock(
-                    index=genesis.index,
-                    timestamp=genesis.timestamp,
-                    transactions=json.dumps(genesis.transactions, ensure_ascii=False),
-                    previous_hash=genesis.previous_hash,
-                    hash=genesis.hash,
-                    node_id=self.node_id,
-                    confirming_node_id=self.node_id,
-                    confirmed=True
-                )
-                db.session.add(genesis_db)
-                db.session.commit()
-                app.logger.info(f"Node {self.node_id}: Genesis block created")
-                return genesis
+                    genesis.hash = genesis.calculate_hash()
+                    
+                    # Сохранение в базе данных
+                    genesis_db = BlockchainBlock(
+                        index=genesis.index,
+                        timestamp=genesis.timestamp,
+                        transactions=json.dumps(genesis.transactions, ensure_ascii=False),
+                        previous_hash=genesis.previous_hash,
+                        hash=genesis.hash,
+                        node_id=self.node_id,
+                        confirming_node_id=self.node_id,
+                        confirmed=True
+                    )
+                    db.session.add(genesis_db)
+                    try:
+                        db.session.commit()
+                        app.logger.info(f"Node {self.node_id}: Genesis block created")
+                    except sqlalchemy.exc.IntegrityError as e:
+                        db.session.rollback()
+                        app.logger.warning(f"Node {self.node_id}: Failed to create genesis block due to conflict: {e}")
+                        existing_genesis = db.session.query(BlockchainBlock).filter_by(index=0, node_id=self.node_id).first()
+                        if existing_genesis:
+                            return Block(
+                                index=0,
+                                timestamp=existing_genesis.timestamp,
+                                transactions=json.loads(existing_genesis.transactions),
+                                previous_hash=existing_genesis.previous_hash
+                            )
+                        raise
+                    return genesis
 
     async def sync_genesis_block(self):
         with app.app_context():
@@ -842,81 +898,73 @@ async def check_node_availability(self, node_id):
 
 # Маршрут receive_block
 @app.route('/receive_block', methods=['POST'])
-@csrf.exempt  # Исключить из CSRF-проверки
-def receive_block():
-    try:
-        data = request.get_json()
-        if not data or 'sender_id' not in data or 'block' not in data:
-            app.logger.error("Invalid block data received")
-            return jsonify({"error": "Invalid block data"}), 400
-
-        app.logger.debug(f"Received block request from node {data['sender_id']}: {data}")
-        sender_id = data['sender_id']
-        block_data = data['block']
-
-        block_index = block_data['index']
-        block_timestamp = datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00'))
-        block_transactions = block_data['transactions']
-        block_previous_hash = block_data['previous_hash']
-        block_hash = block_data['hash']
-
-        with app.app_context():
-            # Проверяем, существует ли блок с таким hash и node_id
-            existing_block = db.session.query(BlockchainBlock).filter_by(
-                hash=block_hash,
-                node_id=sender_id
-            ).first()
-
-            if existing_block:
-                if not existing_block.confirmed:
-                    existing_block.confirmed = True
-                    existing_block.confirming_node_id = app.config['NODE_ID']
-                    db.session.commit()
-                    app.logger.info(f"Block #{block_index} already exists, updated confirmation by node {app.config['NODE_ID']}")
-                return jsonify({"status": "Block already exists"}), 200
-
-            # Проверяем предыдущий блок
-            last_block = db.session.query(BlockchainBlock).filter_by(
-                node_id=sender_id
-            ).order_by(BlockchainBlock.index.desc()).first()
-
-            if last_block and last_block.hash != block_previous_hash:
-                app.logger.error(f"Invalid previous hash for block #{block_index}")
-                return jsonify({"error": "Invalid previous hash"}), 400
-
-            # Проверяем хэш блока
-            block = Block(
-                index=block_index,
-                timestamp=block_timestamp,
-                transactions=block_transactions,
-                previous_hash=block_previous_hash
-            )
-            computed_hash = block.calculate_hash()
-            if computed_hash != block_hash:
-                app.logger.error(f"Invalid hash for block #{block_index}")
-                return jsonify({"error": "Invalid hash"}), 400
-
-            # Добавляем новый блок
-            block_db = BlockchainBlock(
-                index=block_index,
-                timestamp=block_timestamp,
-                transactions=json.dumps(block_transactions, ensure_ascii=False),
-                previous_hash=block_previous_hash,
-                hash=block_hash,
-                node_id=sender_id,
-                confirmed=True,
-                confirming_node_id=app.config['NODE_ID']
-            )
-            db.session.add(block_db)
-            db.session.commit()
-
-            app.logger.info(f"Block #{block_index} confirmed by node {app.config['NODE_ID']}")
-            return jsonify({"status": "Block accepted"}), 200
-
-    except Exception as e:
-        app.logger.error(f"Error processing block: {str(e)}", exc_info=True)
-        db.session.rollback()
-        return jsonify({"error": str(e)}), 400
+@csrf.exempt
+async def receive_block():
+    data = await request.get_json()
+    app.logger.debug(f"Received block request from node {data.get('sender_id')}: {data}")
+    sender_id = data.get('sender_id')
+    block_data = data.get('block')
+    
+    if not sender_id or not block_data:
+        return jsonify({'error': 'Invalid block data'}), 400
+    
+    node = nodes.get(int(sender_id))
+    if not node:
+        return jsonify({'error': 'Node not found'}), 404
+    
+    with app.app_context():
+        # Проверяем, существует ли блок
+        existing_block = db.session.query(BlockchainBlock).filter_by(
+            hash=block_data['hash'], node_id=sender_id).first()
+        if existing_block:
+            app.logger.info(f"Block #{block_data['index']} already exists for node {sender_id}")
+            return jsonify({'status': 'Block already exists'}), 200
+        
+        # Создаём временный объект блока для проверки
+        block = Block(
+            index=block_data['index'],
+            timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
+            transactions=block_data['transactions'],
+            previous_hash=block_data['previous_hash']
+        )
+        block.hash = block_data['hash']
+        
+        # Проверяем валидность блока
+        if not node.is_valid_new_block(block, node.get_previous_block()):
+            app.logger.error(f"Invalid block #{block_data['index']} from node {sender_id}")
+            return jsonify({'error': 'Invalid block'}), 400
+        
+        # Сохраняем блок временно (без коммита)
+        block_db = BlockchainBlock(
+            index=block.index,
+            timestamp=block.timestamp,
+            transactions=json.dumps(block.transactions, ensure_ascii=False),
+            previous_hash=block.previous_hash,
+            hash=block.hash,
+            node_id=sender_id,
+            confirming_node_id=node.node_id,
+            confirmed=True
+        )
+        db.session.add(block_db)
+        
+        # Проверяем консенсус
+        confirmations = await node.check_consensus(block, sender_id)
+        required_confirmations = len(node.nodes) * 2 // 3 + 1  # Например, 3 из 4
+        app.logger.info(f"Consensus check: {len(confirmations)}/{required_confirmations} confirmations")
+        
+        if len(confirmations) >= required_confirmations:
+            try:
+                db.session.commit()
+                app.logger.info(f"Block #{block.index} confirmed by node {node.node_id}")
+                return jsonify({'status': 'Block accepted'}), 200
+            except sqlalchemy.exc.IntegrityError as e:
+                db.session.rollback()
+                app.logger.error(f"Error processing block: {e}")
+                return jsonify({'error': str(e)}), 400
+        else:
+            db.session.rollback()
+            app.logger.warning(f"Consensus not reached for block #{block.index}: {len(confirmations)}/{required_confirmations}")
+            return jsonify({'error': 'Consensus not reached'}), 400
 
 
 async def broadcast_confirmation(block_index, creator_node_id, confirming_node_id):
