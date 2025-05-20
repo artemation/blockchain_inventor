@@ -307,9 +307,9 @@ class Node:
 
     # В начале работы узла
     async def sync_blockchain(self):
-        app.logger.info(f"Node {self.node_id} starting blockchain sync")
+        current_app.logger.info(f"Node {self.node_id} starting blockchain sync")
         headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
-        local_height = db.session.query(func.max(BlockchainBlock.index)).scalar() or -1
+        local_height = db.session.query(func.max(BlockchainBlock.index)).filter_by(node_id=self.node_id).scalar() or -1
         longest_chain = None
         max_height = local_height
     
@@ -329,15 +329,17 @@ class Node:
                                     if chain_response.status == 200:
                                         chain_data = await chain_response.json()
                                         longest_chain = chain_data.get('chain', [])
-                                        app.logger.debug(f"Received chain from node {node_id}: {len(longest_chain)} blocks")
+                                        current_app.logger.debug(f"Received chain from node {node_id}: {len(longest_chain)} blocks")
+                            else:
+                                current_app.logger.info(f"Node {node_id} height {remote_height} <= local height {local_height}")
                         else:
-                            app.logger.error(f"Failed to get height from node {node_id}: status={response.status}")
+                            current_app.logger.error(f"Failed to get height from node {node_id}: status={response.status}")
             except Exception as e:
-                app.logger.error(f"Error syncing with node {node_id}: {str(e)}")
+                current_app.logger.error(f"Error syncing with node {node_id}: {str(e)}")
     
         if longest_chain and max_height > local_height:
-            app.logger.info(f"Found longer chain with height {max_height}")
-            with app.app_context():
+            current_app.logger.info(f"Found longer chain with height {max_height}")
+            with current_app.app_context():
                 previous_hash = "0"
                 for block_data in longest_chain:
                     block = Block(
@@ -347,38 +349,33 @@ class Node:
                         previous_hash=block_data['previous_hash']
                     )
                     if block.calculate_hash() != block_data['hash'] or block.previous_hash != previous_hash:
-                        app.logger.error(f"Invalid block #{block_data['index']} from node {node_id}")
+                        current_app.logger.error(f"Invalid block #{block_data['index']} from node {node_id}")
                         return
                     previous_hash = block_data['hash']
     
-                db.session.query(BlockchainBlock).filter(BlockchainBlock.index > local_height).delete()
-                db.session.commit()
-    
-                for block_data in longest_chain:
-                    try:
-                        existing_block = db.session.query(BlockchainBlock).filter_by(
-                            index=block_data['index'], hash=block_data['hash']).first()
-                        if not existing_block:
-                            new_block = BlockchainBlock(
-                                index=block_data['index'],
-                                timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
-                                transactions=json.dumps(block_data['transactions'], ensure_ascii=False),
-                                previous_hash=block_data['previous_hash'],
-                                hash=block_data['hash'],
-                                node_id=block_data.get('node_id', self.node_id),
-                                confirming_node_id=self.node_id,
-                                confirmed=True
-                            )
-                            db.session.add(new_block)
-                            db.session.commit()
-                            app.logger.debug(f"Synced block #{block_data['index']}")
-                    except Exception as e:
-                        app.logger.error(f"Error syncing block #{block_data.get('index')}: {e}")
-                        db.session.rollback()
-                        return
-            app.logger.info(f"Node {self.node_id} synced to height {max_height}")
+                    existing_block = db.session.query(BlockchainBlock).filter_by(
+                        hash=block_data['hash'],
+                        node_id=self.node_id
+                    ).first()
+                    if not existing_block:
+                        new_block = BlockchainBlock(
+                            index=block_data['index'],
+                            timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
+                            transactions=json.dumps(block_data['transactions'], ensure_ascii=False),
+                            previous_hash=block_data['previous_hash'],
+                            hash=block_data['hash'],
+                            node_id=self.node_id,
+                            confirming_node_id=self.node_id,
+                            confirmed=True
+                        )
+                        db.session.add(new_block)
+                        db.session.commit()
+                        current_app.logger.debug(f"Synced block #{block_data['index']}")
+                    else:
+                        current_app.logger.debug(f"Block #{block_data['index']} already exists")
+                current_app.logger.info(f"Node {self.node_id} synced to height {max_height}")
         else:
-            app.logger.info(f"No longer chain found, height {local_height}")
+            current_app.logger.info(f"No longer chain found, height {local_height}")
 
     async def request_block_from_node(self, node_id, block_index):
         """Запросить блок с определенным индексом у узла"""
@@ -533,7 +530,7 @@ class Node:
                 await self.apply_transaction(sequence_number, digest)
 
     async def broadcast_new_block(self, block, transaction_record, block_db):
-        total_nodes = len(self.nodes) + 1  # Включаем текущий узел
+        total_nodes = len(self.nodes) + 1
         f = (total_nodes - 1) // 3
         required_confirmations = 2 * f + 1
         confirmations = 1  # Считаем текущий узел
@@ -545,7 +542,7 @@ class Node:
             'previous_hash': block.previous_hash,
             'hash': block.hash
         }
-        app.logger.debug(f"Broadcasting block #{block.index}")
+        current_app.logger.debug(f"Broadcasting block #{block.index} with hash {block.hash}")
     
         tasks = []
         for node_id, domain in self.nodes.items():
@@ -560,45 +557,44 @@ class Node:
         responses = await asyncio.gather(*tasks, return_exceptions=True)
         for node_id, response in responses:
             if isinstance(response, Exception):
-                app.logger.error(f"Error sending to node {node_id}: {response}")
+                current_app.logger.error(f"Error sending to node {node_id}: {response}")
                 continue
             try:
                 status, body = response
-                app.logger.debug(f"Response from node {node_id}: status={status}, body={body}")
-                if status == 200 and (body.get("status") in ["Block accepted", "Block already exists"]):
+                current_app.logger.debug(f"Node {node_id} response: status={status}, body={body}")
+                if status == 200 and body.get("status") in ["Block accepted", "Block already exists"]:
                     confirmations += 1
-                    app.logger.info(f"Node {node_id} confirmed block #{block.index}")
+                    current_app.logger.info(f"Node {node_id} confirmed block #{block.index}")
                 else:
-                    app.logger.error(f"Node {node_id} returned status {status}: {body}")
+                    current_app.logger.error(f"Node {node_id} failed to confirm block #{block.index}: {body}")
             except Exception as e:
-                app.logger.error(f"Error processing response from node {node_id}: {e}")
+                current_app.logger.error(f"Error processing response from node {node_id}: {e}")
     
-        app.logger.info(f"Consensus check: {confirmations}/{required_confirmations} confirmations")
+        current_app.logger.info(f"Consensus check: {confirmations}/{required_confirmations} confirmations")
         if confirmations >= required_confirmations:
             try:
-                with app.app_context():
+                with current_app.app_context():
                     existing_block = db.session.query(BlockchainBlock).filter_by(
                         hash=block.hash,
-                        node_id=self.node_id,
-                        confirming_node_id=self.node_id
+                        node_id=self.node_id
                     ).first()
                     if existing_block:
-                        app.logger.info(f"Block #{block.index} already exists")
                         if not existing_block.confirmed:
                             existing_block.confirmed = True
                             db.session.commit()
+                            current_app.logger.info(f"Block #{block.index} already exists, updated confirmation")
                     else:
                         db.session.add(transaction_record)
                         db.session.add(block_db)
                         block_db.confirmed = True
                         db.session.commit()
-                        app.logger.info(f"Block #{block.index} committed")
+                        current_app.logger.info(f"Block #{block.index} committed")
             except Exception as e:
                 db.session.rollback()
-                app.logger.error(f"Database error: {e}", exc_info=True)
+                current_app.logger.error(f"Database error committing block #{block.index}: {e}", exc_info=True)
                 return confirmations, total_nodes
         else:
-            app.logger.warning(f"Consensus not reached for block #{block.index}")
+            current_app.logger.warning(f"Consensus not reached for block #{block.index}: {confirmations}/{required_confirmations}")
             db.session.rollback()
     
         return confirmations, total_nodes
@@ -834,7 +830,7 @@ async def check_node_availability(self, node_id):
 @csrf.exempt  # Исключить из CSRF-проверки
 def receive_block():
     try:
-        data = request.get_json()  # Убрали await
+        data = request.get_json()
         if not data or 'sender_id' not in data or 'block' not in data:
             app.logger.error("Invalid block data received")
             return jsonify({"error": "Invalid block data"}), 400
@@ -850,28 +846,30 @@ def receive_block():
         block_hash = block_data['hash']
 
         with app.app_context():
+            # Проверяем, существует ли блок с таким hash и node_id
             existing_block = db.session.query(BlockchainBlock).filter_by(
                 hash=block_hash,
-                node_id=sender_id,
-                confirming_node_id=current_node.node_id
+                node_id=sender_id
             ).first()
 
             if existing_block:
-                app.logger.info(f"Block #{block_index} from node {sender_id} already exists")
                 if not existing_block.confirmed:
                     existing_block.confirmed = True
+                    existing_block.confirming_node_id = app.config['NODE_ID']
                     db.session.commit()
+                    app.logger.info(f"Block #{block_index} already exists, updated confirmation by node {app.config['NODE_ID']}")
                 return jsonify({"status": "Block already exists"}), 200
 
+            # Проверяем предыдущий блок
             last_block = db.session.query(BlockchainBlock).filter_by(
-                node_id=sender_id,
-                confirming_node_id=current_node.node_id
+                node_id=sender_id
             ).order_by(BlockchainBlock.index.desc()).first()
 
             if last_block and last_block.hash != block_previous_hash:
                 app.logger.error(f"Invalid previous hash for block #{block_index}")
                 return jsonify({"error": "Invalid previous hash"}), 400
 
+            # Проверяем хэш блока
             block = Block(
                 index=block_index,
                 timestamp=block_timestamp,
@@ -883,6 +881,7 @@ def receive_block():
                 app.logger.error(f"Invalid hash for block #{block_index}")
                 return jsonify({"error": "Invalid hash"}), 400
 
+            # Добавляем новый блок
             block_db = BlockchainBlock(
                 index=block_index,
                 timestamp=block_timestamp,
@@ -891,16 +890,17 @@ def receive_block():
                 hash=block_hash,
                 node_id=sender_id,
                 confirmed=True,
-                confirming_node_id=current_node.node_id
+                confirming_node_id=app.config['NODE_ID']
             )
             db.session.add(block_db)
             db.session.commit()
 
-        app.logger.info(f"Block #{block_index} confirmed by node {current_node.node_id}")
-        return jsonify({"status": "Block accepted"}), 200
+            app.logger.info(f"Block #{block_index} confirmed by node {app.config['NODE_ID']}")
+            return jsonify({"status": "Block accepted"}), 200
 
     except Exception as e:
         app.logger.error(f"Error processing block: {str(e)}", exc_info=True)
+        db.session.rollback()
         return jsonify({"error": str(e)}), 400
 
 
@@ -2070,6 +2070,21 @@ async def get_chain():
             } for block in chain
         ]
         return jsonify({'chain': chain_data})
+
+@app.route('/debug_blockchain')
+@login_required
+def debug_blockchain():
+    blocks = db.session.query(BlockchainBlock).all()
+    block_data = [
+        {
+            'index': b.index,
+            'hash': b.hash,
+            'node_id': b.node_id,
+            'confirming_node_id': b.confirming_node_id,
+            'confirmed': b.confirmed
+        } for b in blocks
+    ]
+    return jsonify({'blocks': block_data})
 
 async def start_sync(node):
     await node.sync_blockchain()
