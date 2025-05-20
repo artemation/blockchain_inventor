@@ -57,6 +57,7 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL').replace('
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your_default_secret_key')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['WTF_CSRF_ENABLED'] = True
+app.config['NODE_ID'] = NODE_ID
 
 db.init_app(app)
 
