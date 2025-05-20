@@ -921,7 +921,7 @@ async def receive_block():
     sender_id = data.get('sender_id')
     block_data = data.get('block')
     
-    if not sender_id or not block_data:
+    if sender_id is None or block_data is None:
         app.logger.error(f"Invalid block data: sender_id={sender_id}, block_data={block_data}")
         return jsonify({'error': 'Invalid block data'}), 400
     
