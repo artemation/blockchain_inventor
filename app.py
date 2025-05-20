@@ -34,6 +34,7 @@ NODE_DOMAINS = {
 }
 
 app = Flask(__name__)
+csrf = CSRFProtect(app)
 CORS(app)
 
 app.logger.setLevel(logging.DEBUG)  # Убедитесь, что уровень логирования установлен на DEBUG
