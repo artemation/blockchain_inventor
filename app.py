@@ -25,6 +25,8 @@ import time
 from functools import wraps
 
 load_dotenv()
+# Определяем NODE_ID в начале
+NODE_ID = int(os.environ.get('NODE_ID', 0))
 
 NODE_DOMAINS = {
     0: os.environ.get('NODE0_DOMAIN', 'blockchaininventory0.up.railway.app'),
