@@ -23,6 +23,7 @@ from flask_cors import CORS
 from flask_session import Session
 import time
 from functools import wraps
+from threading import Lock
 
 load_dotenv()
 # Определяем NODE_ID в начале
@@ -213,6 +214,8 @@ class Block:
         return block
 
 class Node:
+genesis_lock = Lock()
+
     def __init__(self, node_id, nodes, host, port):
         self.node_id = node_id
         self.nodes = nodes
@@ -233,14 +236,15 @@ class Node:
     
     def create_genesis_block(self):
         with app.app_context():
-            existing_genesis = db.session.query(BlockchainBlock).filter_by(index=0).first()
-            if existing_genesis:
-                return Block(
-                    index=0,
-                    timestamp=existing_genesis.timestamp,
-                    transactions=json.loads(existing_genesis.transactions),
-                    previous_hash=existing_genesis.previous_hash
-                )
+            with genesis_lock:  # Добавляем блокировку
+                existing_genesis = db.session.query(BlockchainBlock).filter_by(index=0).first()
+                if existing_genesis:
+                    return Block(
+                        index=0,
+                        timestamp=existing_genesis.timestamp,
+                        transactions=json.loads(existing_genesis.transactions),
+                        previous_hash=existing_genesis.previous_hash
+                    )
     
             fixed_timestamp = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
             genesis_transactions = [{"message": "Genesis Block", "timestamp": fixed_timestamp.isoformat()}]
@@ -264,46 +268,51 @@ class Node:
             db.session.add(genesis_db)
             db.session.commit()
             app.logger.info("Genesis block created")
-    
             return genesis
 
     async def sync_genesis_block(self):
         with app.app_context():
-            if db.session.query(BlockchainBlock).filter_by(index=0).first():
+            # Проверяем наличие блока для текущего узла
+            existing_block = db.session.query(BlockchainBlock).filter_by(
+                index=0, node_id=self.node_id).first()
+            if existing_block:
                 app.logger.info(f"Node {self.node_id}: Genesis block exists")
                 return
     
-        for node_id, domain in self.nodes.items():
-            if node_id != self.node_id:
-                url = f"https://{domain}/get_block/0"
-                try:
-                    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
-                        async with session.get(url) as response:
-                            if response.status == 200:
-                                block_data = await response.json()
-                                with app.app_context():
-                                    existing_block = db.session.query(BlockchainBlock).filter_by(
-                                        index=0, hash=block_data['hash']).first()
-                                    if not existing_block:
-                                        genesis_block = BlockchainBlock(
-                                            index=block_data['index'],
-                                            timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
-                                            transactions=json.dumps(block_data['transactions'], ensure_ascii=False),
-                                            previous_hash=block_data['previous_hash'],
-                                            hash=block_data['hash'],
-                                            node_id=block_data['node_id'],
-                                            confirming_node_id=self.node_id,
-                                            confirmed=True
-                                        )
-                                        db.session.add(genesis_block)
-                                        db.session.commit()
-                                        app.logger.info(f"Node {self.node_id}: Genesis block synced from node {node_id}")
-                                        return
-                except Exception as e:
-                    app.logger.error(f"Node {self.node_id}: Failed to sync genesis from node {node_id}: {e}")
+            # Пытаемся синхронизировать с другими узлами
+            for node_id, domain in self.nodes.items():
+                if node_id != self.node_id:
+                    url = f"https://{domain}/get_block/0"
+                    try:
+                        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
+                            async with session.get(url) as response:
+                                if response.status == 200:
+                                    block_data = await response.json()
+                                    with app.app_context():
+                                        # Проверяем еще раз перед добавлением
+                                        existing_block = db.session.query(BlockchainBlock).filter_by(
+                                            index=0, node_id=self.node_id).first()
+                                        if not existing_block:
+                                            genesis_block = BlockchainBlock(
+                                                index=block_data['index'],
+                                                timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
+                                                transactions=json.dumps(block_data['transactions'], ensure_ascii=False),
+                                                previous_hash=block_data['previous_hash'],
+                                                hash=block_data['hash'],
+                                                node_id=self.node_id,  # Используем node_id текущего узла
+                                                confirming_node_id=self.node_id,
+                                                confirmed=True
+                                            )
+                                            db.session.add(genesis_block)
+                                            db.session.commit()
+                                            app.logger.info(f"Node {self.node_id}: Genesis block synced from node {node_id}")
+                                            return
+                    except Exception as e:
+                        app.logger.error(f"Node {self.node_id}: Failed to sync genesis from node {node_id}: {e}")
     
-        app.logger.info(f"Node {self.node_id}: Creating local genesis block")
-        self.create_genesis_block()
+            # Создаем локальный блок только если синхронизация не удалась
+            app.logger.info(f"Node {self.node_id}: Creating local genesis block")
+            self.create_genesis_block()
 
     def get_last_block(self):
         return self.chain[-1]
@@ -411,18 +420,21 @@ class Node:
         except Exception as e:
             app.logger.error(f"Error requesting block {block_index} from node {node_id}: {e}")
 
-    async def send_message(self, message):
-        tasks = []
-        for node_id, domain in self.nodes.items():
-            if node_id != self.node_id:
-                url = f"https://{domain}/receive_message"
-                try:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.post(url, json=message, timeout=5) as response:
-                            app.logger.debug(f"Sent message to node {node_id}: {message['message_type']}")
-                except Exception as e:
-                    app.logger.error(f"Exception in send_message to node {node_id}: {e}")
-        await asyncio.gather(*tasks, return_exceptions=True)
+    async def send_message(self, node_id, message_type, data):
+        message = {
+            'type': message_type,
+            'data': data,
+            'sender_id': self.node_id
+        }
+        url = f"https://{self.nodes[node_id]}/receive_message"
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
+                async with session.post(url, json=message) as response:
+                    app.logger.debug(f"Sent message to node {node_id}: {message_type}")
+                    return response.status == 200
+        except Exception as e:
+            app.logger.error(f"Exception in send_message to node {node_id}: {e}")
+            return False
 
     async def send_post_request(self, node_id, url, payload):
         try:
@@ -442,10 +454,10 @@ class Node:
     
     async def receive_message(self, message):
         app.logger.debug(f"Node {self.node_id} received: {message}")
-        print(f"Node {self.node_id} received: {message}")
         message_type = message['type']
         data = message['data']
-
+        sender_id = message.get('sender_id')
+    
         if message_type == 'Pre-prepare':
             if not self.is_leader:
                 for node_id in self.nodes:
@@ -454,14 +466,12 @@ class Node:
                             'sequence_number': data['sequence_number'],
                             'digest': data['digest']
                         })
-            self.pre_prepare(message['sender_id'], data['sequence_number'], data['digest'], data['request'])
+                self.pre_prepare(sender_id, data['sequence_number'], data['digest'], data['request'])
         elif message_type == 'Prepare':
             app.logger.debug(
                 f"Node {self.node_id} is receiving prepare for sequence {data['sequence_number']} with digest {data['digest']}")
-            self.prepare(message['sender_id'], data['sequence_number'], data['digest'])
-
-            if data['sequence_number'] in self.prepared and data['digest'] in self.prepared[
-                data['sequence_number']] and len(self.prepared[data['sequence_number']][data['digest']]) >= 1:
+            self.prepare(sender_id, data['sequence_number'], data['digest'])
+            if data['sequence_number'] in self.prepared and data['digest'] in self.prepared[data['sequence_number']] and len(self.prepared[data['sequence_number']][data['digest']]) >= 1:
                 app.logger.debug(
                     f"Node {self.node_id} has enough prepares for sequence {data['sequence_number']} with digest {data['digest']}")
                 for node_id in self.nodes:
@@ -1237,21 +1247,23 @@ def view_blockchain():
         return redirect(url_for('index'))
 
 @app.route('/receive_message', methods=['POST'])
+@csrf.exempt
 async def receive_message():
     app.logger.debug('Entering receive_message function')
     message = await request.get_json()
+    if not message or 'type' not in message or 'sender_id' not in message:
+        app.logger.error("Invalid message format")
+        return jsonify({'success': False, 'message': 'Invalid message format'}), 400
     app.logger.debug(f"Received message: {message}")
-    # node_id = message['sender_id']
-    # node = nodes.get(node_id)
-    # if node:
-    #     await node.receive_message(message)
-    #     app.logger.debug('Exiting receive_message function')
-    #     return jsonify({'success': True})
-    # else:
-    #     app.logger.debug('Exiting receive_message function with error')
-    #     return jsonify({'success': False, 'message': 'Node not found'}), 404
-    app.logger.debug('PBFT disabled, ignoring message')
-    return jsonify({'success': True, 'message': 'PBFT disabled'})
+    node_id = message['sender_id']
+    node = nodes.get(node_id)
+    if node:
+        await node.receive_message(message)
+        app.logger.debug('Exiting receive_message function')
+        return jsonify({'success': True})
+    else:
+        app.logger.error(f"Node {node_id} not found")
+        return jsonify({'success': False, 'message': 'Node not found'}), 404
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
