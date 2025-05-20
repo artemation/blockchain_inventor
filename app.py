@@ -916,8 +916,8 @@ async def check_node_availability(self, node_id):
 @app.route('/receive_block', methods=['POST'])
 @csrf.exempt
 async def receive_block():
-    data = request.get_json()  # Убрали await
-    app.logger.debug(f"Received block request from node {data.get('sender_id')}: {data}")
+    data = request.get_json()
+    app.logger.debug(f"Received block request: {data}")
     sender_id = data.get('sender_id')
     block_data = data.get('block')
     
@@ -937,14 +937,12 @@ async def receive_block():
         return jsonify({'error': 'Node not found'}), 404
     
     with app.app_context():
-        # Проверяем, существует ли блок
         existing_block = db.session.query(BlockchainBlock).filter_by(
             hash=block_data['hash'], node_id=sender_id).first()
         if existing_block:
             app.logger.info(f"Block #{block_data['index']} already exists for node {sender_id}")
             return jsonify({'status': 'Block already exists'}), 200
         
-        # Создаём временный объект блока для проверки
         try:
             block = Block(
                 index=block_data['index'],
@@ -957,25 +955,22 @@ async def receive_block():
             app.logger.error(f"Failed to create block object: {e}")
             return jsonify({'error': 'Invalid block format'}), 400
         
-        # Проверяем валидность блока
         last_block = db.session.query(BlockchainBlock).filter_by(node_id=sender_id).order_by(BlockchainBlock.index.desc()).first()
         if last_block:
             if block.previous_hash != last_block.hash:
-                app.logger.error(f"Invalid block #{block_data['index']} from node {sender_id}: previous_hash mismatch (expected {last_block.hash}, got {block.previous_hash})")
+                app.logger.error(f"Invalid previous_hash: expected {last_block.hash}, got {block.previous_hash}")
                 return jsonify({'error': 'Invalid block: previous_hash mismatch'}), 400
             if block.index != last_block.index + 1:
-                app.logger.error(f"Invalid block #{block_data['index']} from node {sender_id}: index mismatch (expected {last_block.index + 1}, got {block.index})")
+                app.logger.error(f"Invalid index: expected {last_block.index + 1}, got {block.index}")
                 return jsonify({'error': 'Invalid block: index mismatch'}), 400
         else:
-            # Если это первый блок (генезис), проверяем, что index=0
             if block.index != 0:
-                app.logger.error(f"Invalid block #{block_data['index']} from node {sender_id}: expected genesis block (index=0)")
+                app.logger.error(f"Expected genesis block, got index {block.index}")
                 return jsonify({'error': 'Invalid block: expected genesis block'}), 400
         
-        # Проверяем хэш блока
         calculated_hash = block.calculate_hash()
         if calculated_hash != block.hash:
-            app.logger.error(f"Invalid block #{block_data['index']} from node {sender_id}: hash mismatch (calculated {calculated_hash}, got {block.hash})")
+            app.logger.error(f"Hash mismatch: calculated {calculated_hash}, got {block.hash}")
             return jsonify({'error': 'Invalid block: hash mismatch'}), 400
         
         # Сохраняем блок временно (без коммита)
