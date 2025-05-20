@@ -931,18 +931,20 @@ async def receive_block():
         app.logger.error(f"Invalid sender_id: {sender_id}")
         return jsonify({'error': 'Invalid sender_id'}), 400
     
-    node = nodes.get(sender_id)
+    node = nodes.get(NODE_ID)  # Get the current node
     if not node:
-        app.logger.error(f"Node not found: {sender_id}")
+        app.logger.error(f"Current node {NODE_ID} not found")
         return jsonify({'error': 'Node not found'}), 404
     
     with app.app_context():
+        # Check if block already exists
         existing_block = db.session.query(BlockchainBlock).filter_by(
-            hash=block_data['hash'], node_id=sender_id).first()
+            hash=block_data['hash'], node_id=NODE_ID).first()
         if existing_block:
-            app.logger.info(f"Block #{block_data['index']} already exists for node {sender_id}")
+            app.logger.info(f"Block #{block_data['index']} already exists for node {NODE_ID}")
             return jsonify({'status': 'Block already exists'}), 200
         
+        # Create block object
         try:
             block = Block(
                 index=block_data['index'],
@@ -955,9 +957,10 @@ async def receive_block():
             app.logger.error(f"Failed to create block object: {e}")
             return jsonify({'error': 'Invalid block format'}), 400
         
-        last_block = db.session.query(BlockchainBlock).filter_by(node_id=sender_id).order_by(BlockchainBlock.index.desc()).first()
+        # Validate block
+        last_block = db.session.query(BlockchainBlock).filter_by(node_id=NODE_ID).order_by(BlockchainBlock.index.desc()).first()
         if last_block:
-            if block.previous_hash != last_block.hash:
+            if block.previous_hash != last_block.hash.strip():  # Ensure no spaces affect comparison
                 app.logger.error(f"Invalid previous_hash: expected {last_block.hash}, got {block.previous_hash}")
                 return jsonify({'error': 'Invalid block: previous_hash mismatch'}), 400
             if block.index != last_block.index + 1:
@@ -973,37 +976,26 @@ async def receive_block():
             app.logger.error(f"Hash mismatch: calculated {calculated_hash}, got {block.hash}")
             return jsonify({'error': 'Invalid block: hash mismatch'}), 400
         
-        # Сохраняем блок временно (без коммита)
+        # Save the block if valid
         block_db = BlockchainBlock(
             index=block.index,
             timestamp=block.timestamp,
             transactions=json.dumps(block.transactions, ensure_ascii=False),
             previous_hash=block.previous_hash,
             hash=block.hash,
-            node_id=sender_id,
-            confirming_node_id=NODE_ID,  # Текущий узел подтверждает
+            node_id=NODE_ID,
+            confirming_node_id=NODE_ID,
             confirmed=True
         )
         db.session.add(block_db)
-        
-        # Проверяем консенсус
-        confirmations = await node.check_consensus(block, sender_id)
-        required_confirmations = len(node.nodes) * 2 // 3 + 1  # Например, 2 из 3 для 3 узлов
-        app.logger.info(f"Consensus check: {len(confirmations)}/{required_confirmations} confirmations")
-        
-        if len(confirmations) >= required_confirmations:
-            try:
-                db.session.commit()
-                app.logger.info(f"Block #{block.index} confirmed by node {NODE_ID}")
-                return jsonify({'status': 'Block accepted'}), 200
-            except sqlalchemy.exc.IntegrityError as e:
-                db.session.rollback()
-                app.logger.error(f"Error processing block: {e}")
-                return jsonify({'error': str(e)}), 400
-        else:
+        try:
+            db.session.commit()
+            app.logger.info(f"Block #{block.index} accepted by node {NODE_ID}")
+            return jsonify({'status': 'Block accepted'}), 200
+        except sqlalchemy.exc.IntegrityError as e:
             db.session.rollback()
-            app.logger.warning(f"Consensus not reached for block #{block.index}: {len(confirmations)}/{required_confirmations}")
-            return jsonify({'error': 'Consensus not reached'}), 400
+            app.logger.error(f"Error saving block: {e}")
+            return jsonify({'error': 'Database error'}), 500
 
 
 async def broadcast_confirmation(block_index, creator_node_id, confirming_node_id):
