@@ -214,7 +214,7 @@ class Block:
         return block
 
 class Node:
-genesis_lock = Lock()
+    genesis_lock = Lock()
 
     def __init__(self, node_id, nodes, host, port):
         self.node_id = node_id
@@ -236,39 +236,41 @@ genesis_lock = Lock()
     
     def create_genesis_block(self):
         with app.app_context():
-            with genesis_lock:  # Добавляем блокировку
-                existing_genesis = db.session.query(BlockchainBlock).filter_by(index=0).first()
+            with self.genesis_lock:  # Используем блокировку
+                existing_genesis = db.session.query(BlockchainBlock).filter_by(index=0, node_id=self.node_id).first()
                 if existing_genesis:
+                    app.logger.info(f"Node {self.node_id}: Genesis block already exists")
                     return Block(
                         index=0,
                         timestamp=existing_genesis.timestamp,
                         transactions=json.loads(existing_genesis.transactions),
                         previous_hash=existing_genesis.previous_hash
                     )
-    
-            fixed_timestamp = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
-            genesis_transactions = [{"message": "Genesis Block", "timestamp": fixed_timestamp.isoformat()}]
-            genesis = Block(
-                index=0,
-                timestamp=fixed_timestamp,
-                transactions=genesis_transactions,
-                previous_hash="0"
-            )
-    
-            genesis_db = BlockchainBlock(
-                index=genesis.index,
-                timestamp=genesis.timestamp,
-                transactions=json.dumps(genesis.transactions, ensure_ascii=False),
-                previous_hash=genesis.previous_hash,
-                hash=genesis.hash,
-                node_id=0,
-                confirming_node_id=self.node_id,
-                confirmed=True
-            )
-            db.session.add(genesis_db)
-            db.session.commit()
-            app.logger.info("Genesis block created")
-            return genesis
+                
+                # Создание нового генезис-блока
+                genesis = Block(
+                    index=0,
+                    timestamp=datetime(2025, 1, 1, tzinfo=timezone.utc),
+                    transactions=[{"message": "Genesis Block", "timestamp": "2025-01-01T00:00:00+00:00"}],
+                    previous_hash="0"
+                )
+                genesis.hash = genesis.calculate_hash()
+                
+                # Сохранение в базе данных
+                genesis_db = BlockchainBlock(
+                    index=genesis.index,
+                    timestamp=genesis.timestamp,
+                    transactions=json.dumps(genesis.transactions, ensure_ascii=False),
+                    previous_hash=genesis.previous_hash,
+                    hash=genesis.hash,
+                    node_id=self.node_id,
+                    confirming_node_id=self.node_id,
+                    confirmed=True
+                )
+                db.session.add(genesis_db)
+                db.session.commit()
+                app.logger.info(f"Node {self.node_id}: Genesis block created")
+                return genesis
 
     async def sync_genesis_block(self):
         with app.app_context():
