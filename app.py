@@ -56,7 +56,7 @@ db_name = os.environ.get('DB_NAME')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL').replace('postgres://', 'postgresql://', 1)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your_default_secret_key')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['WTF_CSRF_ENABLED'] = False
+app.config['WTF_CSRF_ENABLED'] = True
 
 db.init_app(app)
 
@@ -831,10 +831,10 @@ async def check_node_availability(self, node_id):
 
 # Маршрут receive_block
 @app.route('/receive_block', methods=['POST'])
-
-async def receive_block():
+@csrf.exempt  # Исключить из CSRF-проверки
+def receive_block():
     try:
-        data = await request.get_json()
+        data = request.get_json()  # Убрали await
         if not data or 'sender_id' not in data or 'block' not in data:
             app.logger.error("Invalid block data received")
             return jsonify({"error": "Invalid block data"}), 400
@@ -850,7 +850,6 @@ async def receive_block():
         block_hash = block_data['hash']
 
         with app.app_context():
-            # Проверяем, существует ли блок
             existing_block = db.session.query(BlockchainBlock).filter_by(
                 hash=block_hash,
                 node_id=sender_id,
@@ -864,7 +863,6 @@ async def receive_block():
                     db.session.commit()
                 return jsonify({"status": "Block already exists"}), 200
 
-            # Проверяем предыдущий хэш
             last_block = db.session.query(BlockchainBlock).filter_by(
                 node_id=sender_id,
                 confirming_node_id=current_node.node_id
@@ -874,19 +872,17 @@ async def receive_block():
                 app.logger.error(f"Invalid previous hash for block #{block_index}")
                 return jsonify({"error": "Invalid previous hash"}), 400
 
-            # Проверяем валидность хэша
             block = Block(
                 index=block_index,
                 timestamp=block_timestamp,
                 transactions=block_transactions,
                 previous_hash=block_previous_hash
             )
-            computed_hash = block.calculate_hash()  # Исправлено: compute_hash -> calculate_hash
+            computed_hash = block.calculate_hash()
             if computed_hash != block_hash:
                 app.logger.error(f"Invalid hash for block #{block_index}")
                 return jsonify({"error": "Invalid hash"}), 400
 
-            # Сохраняем блок
             block_db = BlockchainBlock(
                 index=block_index,
                 timestamp=block_timestamp,
