@@ -878,6 +878,62 @@ class Node:
         data = str(self.index) + str(self.timestamp) + json.dumps(self.transactions, sort_keys=True) + str(self.previous_hash)
         return hashlib.sha256(data.encode('utf-8')).hexdigest()
 
+    async def check_blockchain_integrity(self):
+        """Проверяет целостность блокчейна, проверяя хэши и предыдущие хэши."""
+        try:
+            with app.app_context():
+                blocks = BlockchainBlock.query.filter_by(node_id=self.node_id).order_by(BlockchainBlock.index.asc()).all()
+                if not blocks:
+                    return {'success': True, 'message': 'Блоков для проверки нет'}
+
+                previous_hash = '0' * 64  # Начальный хэш для генезис-блока
+                for block in blocks:
+                    # Проверяем хэш блока
+                    calculated_hash = self.calculate_hash_for_block(block)
+                    if calculated_hash != block.hash:
+                        return {
+                            'success': False,
+                            'message': f'Несоответствие хэша в блоке {block.index}',
+                            'details': {'ожидаемый': calculated_hash, 'фактический': block.hash}
+                        }
+
+                    # Проверяем связь с предыдущим хэшем
+                    if block.index > 0 and block.previous_hash != previous_hash:
+                        return {
+                            'success': False,
+                            'message': f'Несоответствие предыдущего хэша в блоке {block.index}',
+                            'details': {'ожидаемый': previous_hash, 'фактический': block.previous_hash}
+                        }
+
+                    previous_hash = block.hash
+
+                # Проверяем консенсус (например, достаточно ли подтверждений)
+                for block in blocks:
+                    confirmations = BlockchainBlock.query.filter_by(index=block.index, confirmed=True).count()
+                    total_nodes = len(self.nodes) + 1
+                    required = (total_nodes // 3 * 2) + 1
+                    if confirmations < required:
+                        return {
+                            'success': False,
+                            'message': f'Недостаточно подтверждений для блока {block.index}',
+                            'details': {'подтверждений': confirmations, 'требуется': required}
+                        }
+
+                return {'success': True, 'message': 'Целостность блокчейна подтверждена'}
+        except Exception as e:
+            app.logger.error(f"Ошибка при проверке целостности блокчейна: {e}")
+            return {'success': False, 'message': str(e)}
+
+    def calculate_hash_for_block(self, block):
+        """Вспомогательный метод для расчёта хэша блока."""
+        block_string = json.dumps({
+            'index': block.index,
+            'timestamp': block.timestamp.isoformat(),
+            'transactions': json.loads(block.transactions),
+            'previous_hash': block.previous_hash
+        }, sort_keys=True).encode('utf-8')
+        return hashlib.sha256(block_string).hexdigest()
+
 # Создаем узлы блокчейна
 # Используем динамическое создание на основе переменных окружения:
 NODE_ID = int(os.environ.get('NODE_ID', 0))
@@ -2166,6 +2222,13 @@ async def get_chain():
             } for block in chain
         ]
         return jsonify({'chain': chain_data})
+        
+@app.route('/check_blockchain_integrity', methods=['GET'])
+@login_required
+async def check_blockchain_integrity_route():
+    node = Node()  # Или иным способом получите экземпляр Node
+    result = await node.check_blockchain_integrity()
+    return jsonify(result)
 
 @app.route('/debug_blockchain')
 @login_required
