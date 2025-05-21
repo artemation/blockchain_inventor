@@ -496,6 +496,25 @@
             </div>
         </div>
 
+        <button onclick="checkIntegrity()">Проверить целостность блокчейна</button>
+        <div id="integrityResult"></div>
+        
+        <script>
+        function checkIntegrity() {
+            fetch('/check_blockchain_integrity')
+                .then(response => response.json())
+                .then(data => {
+                    const resultDiv = document.getElementById('integrityResult');
+                    if (data.success) {
+                        resultDiv.innerHTML = '<p style="color: green;">Целостность подтверждена</p>';
+                    } else {
+                        resultDiv.innerHTML = '<p style="color: red;">Обнаружены проблемы:</p><ul>' +
+                            data.issues.map(issue => `<li>${issue}</li>`).join('') + '</ul>';
+                    }
+                });
+        }
+        </script>
+        
         <!-- Кнопка для визуализации PBFT -->
         <button class="btn btn-info mb-3" data-toggle="modal" data-target="#pbftModal">
             <i class="fas fa-project-diagram mr-2"></i>Как работает PBFT
