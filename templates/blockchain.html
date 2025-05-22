@@ -815,22 +815,53 @@
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
     <script>
 
-        function verifyBlockchain() {
-            $('#verificationResults').html('<div class="text-center"><i class="fas fa-spinner fa-spin fa-3x"></i><p>Проверка цепочки...</p></div>');
-            $('#verificationModal').modal('show');
-            
-            let blocks = $('.block-card');
-            let totalBlocks = blocks.length;
-            let verifiedBlocks = 0;
-            let results = [];
-            
-            blocks.each(function() {
-                const blockIndex = $(this).data('block-index');
+    function verifyBlockchain() {
+        $('#verificationResults').html(`
+            <div class="text-center">
+                <i class="fas fa-spinner fa-spin fa-3x"></i>
+                <p>Проверка цепочки...</p>
+            </div>
+        `);
+        $('#verificationModal').modal('show');
+        
+        let blocks = $('.block-card');
+        let totalBlocks = blocks.length;
+        let verifiedBlocks = 0;
+        let results = [];
+        
+        // Функция для обработки завершения проверки
+        function processVerification() {
+            if (verifiedBlocks === totalBlocks) {
+                // Сортируем результаты по номеру блока
+                results.sort((a, b) => {
+                    const aIndex = parseInt(a.match(/Блок #(\d+)/)[1]);
+                    const bIndex = parseInt(b.match(/Блок #(\d+)/)[1]);
+                    return aIndex - bIndex;
+                });
                 
-                $.get(`/verify_block/${blockIndex}`, function(data) {
+                const invalidBlocks = results.filter(r => r.includes('badge-danger')).length;
+                const statusClass = invalidBlocks > 0 ? 'alert-danger' : 'alert-success';
+                
+                $('#verificationResults').html(`
+                    <div class="alert ${statusClass}">
+                        Проверено ${totalBlocks} блоков. Найдено ${invalidBlocks} проблемных блоков.
+                    </div>
+                    ${results.join('')}
+                `);
+            }
+        }
+        
+        blocks.each(function() {
+            const blockIndex = $(this).data('block-index');
+            
+            $.ajax({
+                url: `/verify_block/${blockIndex}`,
+                method: 'GET',
+                dataType: 'json',
+                success: function(data) {
                     if (data.success) {
                         data.results.forEach(result => {
-                            let statusHtml = result.is_valid ? 
+                            const statusHtml = result.is_valid ? 
                                 `<span class="badge badge-success">Достоверен</span>` : 
                                 `<span class="badge badge-danger">Недостоверен</span>`;
                             
@@ -845,40 +876,38 @@
                                 </div>
                             `);
                         });
-                        
-                        verifiedBlocks++;
-                        
-                        if (verifiedBlocks === totalBlocks) {
-                            // Сортируем результаты по номеру блока
-                            results.sort((a, b) => {
-                                const aIndex = parseInt(a.match(/Блок #(\d+)/)[1]);
-                                const bIndex = parseInt(b.match(/Блок #(\d+)/)[1]);
-                                return aIndex - bIndex;
-                            });
-                            
-                            $('#verificationResults').html(`
-                                <div class="alert alert-info">
-                                    Проверено ${totalBlocks} блоков. ${results.filter(r => r.includes('badge-danger')).length} проблемных блоков.
-                                </div>
-                                ${results.join('')}
-                            `);
-                        }
                     } else {
-                        $('#verificationResults').html(`
-                            <div class="alert alert-danger">
-                                Ошибка при проверке блока #${blockIndex}: ${data.message}
+                        results.push(`
+                            <div class="card mb-2 border-danger">
+                                <div class="card-body">
+                                    <h5 class="card-title">Блок #${blockIndex}</h5>
+                                    <p><span class="badge badge-danger">Ошибка проверки</span></p>
+                                    <p class="mb-0">${data.message || 'Неизвестная ошибка'}</p>
+                                </div>
                             </div>
                         `);
                     }
-                }).fail(function() {
-                    $('#verificationResults').html(`
-                        <div class="alert alert-danger">
-                            Ошибка при запросе проверки блока #${blockIndex}
+                    
+                    verifiedBlocks++;
+                    processVerification();
+                },
+                error: function(xhr, status, error) {
+                    results.push(`
+                        <div class="card mb-2 border-danger">
+                            <div class="card-body">
+                                <h5 class="card-title">Блок #${blockIndex}</h5>
+                                <p><span class="badge badge-danger">Ошибка запроса</span></p>
+                                <p class="mb-0">${error || 'Неизвестная ошибка'}</p>
+                            </div>
                         </div>
                     `);
-                });
+                    
+                    verifiedBlocks++;
+                    processVerification();
+                }
             });
-        }
+        });
+    }
         
         // Обработчик кнопки проверки
         $(document).ready(function() {
