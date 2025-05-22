@@ -25,6 +25,7 @@ from flask_session import Session
 import time
 from functools import wraps
 from threading import Lock
+import atexit
 
 
 load_dotenv()
@@ -242,10 +243,10 @@ class Node:
         self.chain = []
         self.leader_timeout = None
         self.view_change_in_progress = False
-        # Создаем и сохраняем цикл событий
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
         self.loop.run_until_complete(self.sync_genesis_block())
+        self.loop.run_until_complete(self.sync_view_number())
         self.start_leader_timeout()
 
     def start_leader_timeout(self):
@@ -271,7 +272,6 @@ class Node:
         self.view_change_in_progress = True
         node_logger.info(f"Node {self.node_id} initiating view change for view {self.view_number + 1}")
     
-        # Собираем данные о текущем состоянии цепочки
         last_block = self.get_last_block() if self.chain else None
         chain_data = {
             'view_number': self.view_number + 1,
@@ -299,19 +299,27 @@ class Node:
             if status == 200 and body.get('status') == 'View change accepted':
                 confirmations += 1
                 node_logger.info(f"Node {node_id} confirmed view change to view {self.view_number + 1}")
+            else:
+                node_logger.warning(f"Node {node_id} rejected view change: status={status}, body={body}")
     
         if confirmations >= required_confirmations:
             self.view_number += 1
-            # Определяем нового лидера (например, следующий по ID)
             self.is_leader = (self.node_id == self.view_number % total_nodes)
             node_logger.info(f"Node {self.node_id} view changed to {self.view_number}, is_leader={self.is_leader}")
-            # Сбрасываем таймер
             if not self.is_leader:
                 self.start_leader_timeout()
         else:
             node_logger.warning(f"View change to view {self.view_number + 1} failed: {confirmations}/{required_confirmations}")
         
         self.view_change_in_progress = False
+
+    def shutdown(self):
+        """Очищает ресурсы узла"""
+        if self.leader_timeout:
+            self.leader_timeout.cancel()
+        if self.loop and not self.loop.is_closed():
+            self.loop.close()
+        node_logger.info(f"Node {self.node_id} shut down")
 
     async def handle_request(self, sender_id, request_data):
         """Обрабатывает запрос клиента, перенаправляя его лидеру, если текущий узел не лидер"""
@@ -637,6 +645,36 @@ class Node:
             app.logger.info(f"Node {self.node_id}: Creating local genesis block")
             self.create_genesis_block()
 
+    async def sync_view_number(self):
+        """Синхронизирует номер вида с другими узлами"""
+        tasks = []
+        for node_id, domain in self.nodes.items():
+            if node_id != self.node_id:
+                url = f"https://{domain}/get_view_number"
+                tasks.append(self.send_get_request(node_id, url))
+    
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+        max_view_number = self.view_number
+        for node_id, response in responses:
+            if isinstance(response, Exception):
+                node_logger.warning(f"Failed to get view number from node {node_id}: {response}")
+                continue
+            status, body = response
+            if status == 200 and 'view_number' in body:
+                max_view_number = max(max_view_number, body['view_number'])
+                node_logger.debug(f"Node {self.node_id} received view number {body['view_number']} from node {node_id}")
+        if max_view_number > self.view_number:
+            self.view_number = max_view_number
+            total_nodes = len(self.nodes) + 1
+            self.is_leader = (self.node_id == self.view_number % total_nodes)
+            node_logger.info(f"Node {self.node_id} updated view_number to {self.view_number}, is_leader={self.is_leader}")
+    
+    async def send_get_request(self, node_id, url):
+        """Отправляет GET-запрос к указанному узлу"""
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=5) as response:
+                return response.status, await response.json()
+    
     def get_last_block(self):
         return self.chain[-1]
 
@@ -2584,6 +2622,14 @@ async def handle_leader_request():
         return jsonify({'success': True, 'message': message}), 200
     else:
         return jsonify({'success': False, 'message': message}), 400
+
+def cleanup():
+    """Очищает ресурсы всех узлов при остановке приложения"""
+    for node_id, node in nodes.items():
+        node.shutdown()
+    node_logger.info("All nodes shut down")
+
+atexit.register(cleanup)
 
 if __name__ == '__main__':
     current_node = nodes[NODE_ID]
