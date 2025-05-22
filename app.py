@@ -882,10 +882,11 @@ class Node:
         try:
             # Проверка хэша блока
             timestamp_aware = block.timestamp.replace(tzinfo=timezone.utc)
+            transactions_list = json.loads(block.transactions)  # Парсим строку JSON в список
             calculated_hash = hashlib.sha256(json.dumps({
                 'index': block.index,
                 'timestamp': timestamp_aware.isoformat(),
-                'transactions': block.transactions,  # Используем как строку JSON
+                'transactions': transactions_list,  # Используем список
                 'previous_hash': block.previous_hash
             }, sort_keys=True).encode('utf-8')).hexdigest()
             
@@ -919,6 +920,8 @@ class Node:
                 
             return True, "Блок достоверен"
             
+        except json.JSONDecodeError as e:
+            return False, f"Недопустимый JSON в transactions: {str(e)}"
         except Exception as e:
             return False, f"Ошибка при проверке блока: {str(e)}"
 
