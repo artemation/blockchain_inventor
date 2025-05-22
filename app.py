@@ -2598,6 +2598,18 @@ async def receive_view_change():
         node.start_leader_timeout()
     return jsonify({'status': 'View change confirmed'}), 200
 
+@app.route('/get_view_number', methods=['GET'])
+@csrf.exempt  # Отключаем CSRF, так как это системный маршрут между узлами
+async def get_view_number():
+    """Возвращает текущий номер вида (view_number) для текущего узла"""
+    node = nodes.get(NODE_ID)
+    if not node:
+        node_logger.error(f"Node {NODE_ID} not found")
+        return jsonify({'success': False, 'message': 'Node not found'}), 404
+
+    node_logger.debug(f"Node {NODE_ID} returning view_number: {node.view_number}")
+    return jsonify({'view_number': node.view_number}), 200
+
 # Новый маршрут для обработки запросов лидером
 @app.route('/handle_request', methods=['POST'])
 @csrf.exempt
