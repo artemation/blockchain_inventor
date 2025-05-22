@@ -652,17 +652,24 @@ class Node:
             if node_id != self.node_id:
                 url = f"https://{domain}/get_view_number"
                 tasks.append(self.send_get_request(node_id, url))
-    
+        
         responses = await asyncio.gather(*tasks, return_exceptions=True)
         max_view_number = self.view_number
-        for node_id, response in responses:
+        for response in responses:
             if isinstance(response, Exception):
-                node_logger.warning(f"Failed to get view number from node {node_id}: {response}")
+                node_logger.warning(f"Failed to get view number from node: {response}")
                 continue
-            status, body = response
-            if status == 200 and 'view_number' in body:
-                max_view_number = max(max_view_number, body['view_number'])
-                node_logger.debug(f"Node {self.node_id} received view number {body['view_number']} from node {node_id}")
+            try:
+                status, body = response
+                if status == 200 and 'view_number' in body:
+                    max_view_number = max(max_view_number, body['view_number'])
+                    node_logger.debug(f"Node {self.node_id} received view number {body['view_number']}")
+                else:
+                    node_logger.warning(f"Invalid response from node: status={status}, body={body}")
+            except ValueError as e:
+                node_logger.error(f"Error unpacking response: {e}, response={response}")
+                continue
+        
         if max_view_number > self.view_number:
             self.view_number = max_view_number
             total_nodes = len(self.nodes) + 1
