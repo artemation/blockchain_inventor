@@ -216,6 +216,242 @@ class Block:
         return block
 
 class Node:
+    def __init__(self, node_id, nodes, host, port):
+            self.node_id = node_id
+            self.nodes = nodes
+            self.host = host
+            self.port = port
+            self.sequence_number = 0
+            self.prepared = {}
+            self.committed = {}
+            self.log = []
+            self.view_number = 0  # Номер текущего вида
+            self.is_leader = (node_id == 0)  # Изначально лидер - узел 0
+            self.requests = {}
+            self.chain = []
+            self.leader_timeout = None  # Таймер для отслеживания активности лидера
+            self.view_change_in_progress = False
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.sync_genesis_block())
+            loop.close()
+            # Запускаем таймер для проверки лидера
+            self.start_leader_timeout()
+
+    def start_leader_timeout(self):
+        """Запускает таймер для проверки активности лидера"""
+        if not self.is_leader:
+            self.leader_timeout = threading.Timer(LEADER_TIMEOUT, self.check_leader_activity)
+            self.leader_timeout.start()
+            current_app.logger.debug(f"Node {self.node_id} started leader timeout")
+
+    def check_leader_activity(self):
+        """Проверяет активность лидера и инициирует смену вида при необходимости"""
+        asyncio.run(self.initiate_view_change())
+
+    async def initiate_view_change(self):
+        """Инициирует процесс смены вида"""
+        if self.view_change_in_progress:
+            current_app.logger.debug(f"Node {self.node_id}: View change already in progress")
+            return
+
+        self.view_change_in_progress = True
+        current_app.logger.info(f"Node {self.node_id} initiating view change for view {self.view_number + 1}")
+
+        # Собираем данные о текущем состоянии цепочки
+        last_block = self.get_last_block() if self.chain else None
+        chain_data = {
+            'view_number': self.view_number + 1,
+            'node_id': self.node_id,
+            'last_block_index': last_block.index if last_block else -1,
+            'last_block_hash': last_block.hash if last_block else "0"
+        }
+
+        tasks = []
+        for node_id, domain in self.nodes.items():
+            if node_id != self.node_id:
+                url = f"https://{domain}/request_view_change"
+                tasks.append(self.send_post_request(node_id, url, chain_data))
+
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+        confirmations = 1  # Считаем текущий узел
+        total_nodes = len(self.nodes) + 1
+        required_confirmations = (total_nodes - 1) // 3 * 2 + 1
+
+        for node_id, response in responses:
+            if isinstance(response, Exception):
+                current_app.logger.error(f"Node {node_id} failed to confirm view change: {response}")
+                continue
+            status, body = response
+            if status == 200 and body.get('status') == 'View change accepted':
+                confirmations += 1
+                current_app.logger.info(f"Node {node_id} confirmed view change to view {self.view_number + 1}")
+
+        if confirmations >= required_confirmations:
+            self.view_number += 1
+            # Определяем нового лидера (например, следующий по ID)
+            self.is_leader = (self.node_id == self.view_number % total_nodes)
+            current_app.logger.info(f"Node {self.node_id} view changed to {self.view_number}, is_leader={self.is_leader}")
+            # Сбрасываем таймер
+            if not self.is_leader:
+                self.start_leader_timeout()
+        else:
+            current_app.logger.warning(f"View change to view {self.view_number + 1} failed: {confirmations}/{required_confirmations}")
+        
+        self.view_change_in_progress = False
+
+    async def handle_request(self, sender_id, request_data):
+        """Обрабатывает запрос клиента, перенаправляя его лидеру, если текущий узел не лидер"""
+        try:
+            current_app.logger.debug(f"Node {self.node_id} handling request from client: {sender_id}")
+            current_app.logger.debug(f"Request data: {request_data}")
+
+            if not self.is_leader:
+                # Перенаправляем запрос лидеру
+                leader_id = self.view_number % (len(self.nodes) + 1)
+                if leader_id in self.nodes:
+                    url = f"https://{self.nodes[leader_id]}/handle_request"
+                    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
+                        async with session.post(url, json={'sender_id': sender_id, 'request_data': request_data}) as response:
+                            if response.status == 200:
+                                current_app.logger.debug(f"Request forwarded to leader node {leader_id}")
+                                return True, "Request forwarded to leader"
+                            else:
+                                current_app.logger.error(f"Failed to forward request to leader {leader_id}: {await response.text()}")
+                                return False, "Failed to forward request to leader"
+                else:
+                    current_app.logger.error(f"Leader node {leader_id} not found")
+                    return False, "Leader node not found"
+
+            # Если текущий узел - лидер, обрабатываем запрос
+            self.sequence_number += 1
+            sequence_number = self.sequence_number
+
+            # Добавляем user_id, timestamp и view_number в данные запроса
+            request_data['timestamp'] = datetime.now(timezone.utc).isoformat()
+            request_data['user_id'] = sender_id
+            request_data['view_number'] = self.view_number
+            request_string = json.dumps(request_data, sort_keys=True)
+            request_digest = self.generate_digest(request_string.encode('utf-8'))
+
+            self.requests[sequence_number] = request_string
+            current_app.logger.debug(f"Created request with sequence_number {sequence_number}")
+
+            # Отправляем Pre-prepare сообщение всем узлам
+            for node_id in self.nodes:
+                if node_id != self.node_id:
+                    await self.send_message(node_id, 'Pre-prepare', {
+                        'sequence_number': sequence_number,
+                        'digest': request_digest,
+                        'request': request_string,
+                        'view_number': self.view_number
+                    })
+
+            # Локально выполняем Pre-prepare
+            self.pre_prepare(self.node_id, sequence_number, request_digest, request_string)
+
+            # Применяем транзакцию
+            success, message = await self.apply_transaction(sequence_number, request_digest)
+            if not success:
+                current_app.logger.error(f"Failed to apply transaction: {message}")
+                return False, message
+
+            return True, "Transaction applied successfully."
+        except Exception as e:
+            current_app.logger.error(f"Error in handle_request: {e}")
+            return False, str(e)
+
+    def pre_prepare(self, sender_id, sequence_number, digest, request):
+        """Обрабатывает Pre-prepare сообщение, только если от лидера и view_number совпадает"""
+        if self.is_leader or sender_id != (self.view_number % (len(self.nodes) + 1)):
+            current_app.logger.warning(f"Node {self.node_id} rejected Pre-prepare from {sender_id} (not leader or wrong view)")
+            return
+
+        if sequence_number not in self.prepared:
+            self.prepared[sequence_number] = {}
+        if digest not in self.prepared[sequence_number]:
+            self.prepared[sequence_number][digest] = set()
+
+        self.prepared[sequence_number][digest].add(sender_id)
+        self.requests[sequence_number] = request
+
+        # Рассылаем Prepare сообщения
+        for node_id in self.nodes:
+            if node_id != self.node_id:
+                asyncio.create_task(self.send_message(node_id, 'Prepare', {
+                    'sequence_number': sequence_number,
+                    'digest': digest,
+                    'view_number': self.view_number
+                }))
+
+    async def prepare(self, sender_id, sequence_number, digest):
+        """Обрабатывает Prepare сообщение, проверяя view_number"""
+        if sequence_number not in self.prepared:
+            self.prepared[sequence_number] = {}
+        if digest not in self.prepared[sequence_number]:
+            self.prepared[sequence_number][digest] = set()
+
+        self.prepared[sequence_number][digest].add(sender_id)
+
+        # Проверяем кворум (2f + 1 подтверждений, f=1 для 4 узлов)
+        if len(self.prepared[sequence_number][digest]) >= 2 * 1 + 1:
+            for node_id in self.nodes:
+                if node_id != self.node_id:
+                    await self.send_message(node_id, 'Commit', {
+                        'sequence_number': sequence_number,
+                        'digest': digest,
+                        'view_number': self.view_number
+                    })
+            await self.commit(self.node_id, sequence_number, digest)
+
+    async def commit(self, sender_id, sequence_number, digest):
+        """Обрабатывает Commit сообщение, проверяя view_number"""
+        if sequence_number not in self.committed:
+            self.committed[sequence_number] = {}
+        if digest not in self.committed[sequence_number]:
+            self.committed[sequence_number][digest] = set()
+
+        self.committed[sequence_number][digest].add(sender_id)
+
+        # Проверяем кворум (2f + 1 подтверждений)
+        if len(self.committed[sequence_number][digest]) >= 2 * 1 + 1:
+            if not hasattr(self, 'applied_transactions'):
+                self.applied_transactions = set()
+            if sequence_number not in self.applied_transactions:
+                self.applied_transactions.add(sequence_number)
+                await self.apply_transaction(sequence_number, digest)
+
+    async def receive_message(self, message):
+        """Обрабатывает входящие сообщения с проверкой view_number"""
+        current_app.logger.debug(f"Node {self.node_id} received: {message}")
+        message_type = message['type']
+        data = message['data']
+        sender_id = message.get('sender_id')
+        view_number = data.get('view_number', -1)
+
+        if view_number != self.view_number:
+            current_app.logger.warning(f"Node {self.node_id} rejected message with wrong view number {view_number}")
+            return
+
+        if message_type == 'Pre-prepare':
+            self.pre_prepare(sender_id, data['sequence_number'], data['digest'], data['request'])
+        elif message_type == 'Prepare':
+            current_app.logger.debug(
+                f"Node {self.node_id} is receiving prepare for sequence {data['sequence_number']} with digest {data['digest']}")
+            await self.prepare(sender_id, data['sequence_number'], data['digest'])
+            if data['sequence_number'] in self.prepared and data['digest'] in self.prepared[data['sequence_number']] and len(self.prepared[data['sequence_number']][data['digest']]) >= 1:
+                current_app.logger.debug(
+                    f"Node {self.node_id} has enough prepares for sequence {data['sequence_number']} with digest {data['digest']}")
+                for node_id in self.nodes:
+                    if node_id != self.node_id:
+                        await self.send_message(node_id, 'Commit', {
+                            'sequence_number': data['sequence_number'],
+                            'digest': data['digest'],
+                            'view_number': self.view_number
+                        })
+                await self.commit(self.node_id, data['sequence_number'], data['digest'])
+
+    
     async def check_consensus(self, block, sender_id):
         confirmations = [sender_id]
         tasks = []
@@ -262,23 +498,6 @@ class Node:
     
     
     genesis_lock = Lock()
-
-    def __init__(self, node_id, nodes, host, port):
-        self.node_id = node_id
-        self.nodes = nodes
-        self.host = host
-        self.port = port
-        self.sequence_number = 0
-        self.prepared = {}
-        self.committed = {}
-        self.log = []
-        self.is_leader = (node_id == 0)
-        self.requests = {}
-        self.chain = []
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(self.sync_genesis_block())
-        loop.close()
 
     
     def create_genesis_block(self):
@@ -546,95 +765,6 @@ class Node:
             app.logger.error(f"Error sending POST to node {node_id} at {url}: {e}", exc_info=True)
             return node_id, e
     
-    async def receive_message(self, message):
-        app.logger.debug(f"Node {self.node_id} received: {message}")
-        message_type = message['type']
-        data = message['data']
-        sender_id = message.get('sender_id')
-    
-        if message_type == 'Pre-prepare':
-            if not self.is_leader:
-                for node_id in self.nodes:
-                    if node_id != self.node_id:
-                        await self.send_message(node_id, 'Prepare', {
-                            'sequence_number': data['sequence_number'],
-                            'digest': data['digest']
-                        })
-                self.pre_prepare(sender_id, data['sequence_number'], data['digest'], data['request'])
-        elif message_type == 'Prepare':
-            app.logger.debug(
-                f"Node {self.node_id} is receiving prepare for sequence {data['sequence_number']} with digest {data['digest']}")
-            self.prepare(sender_id, data['sequence_number'], data['digest'])
-            if data['sequence_number'] in self.prepared and data['digest'] in self.prepared[data['sequence_number']] and len(self.prepared[data['sequence_number']][data['digest']]) >= 1:
-                app.logger.debug(
-                    f"Node {self.node_id} has enough prepares for sequence {data['sequence_number']} with digest {data['digest']}")
-                for node_id in self.nodes:
-                    if node_id != self.node_id:
-                        await self.send_message(node_id, 'Commit', {
-                            'sequence_number': data['sequence_number'],
-                            'digest': data['digest']
-                        })
-                await self.commit(self.node_id, data['sequence_number'], data['digest'])
-
-    def pre_prepare(self, sender_id, sequence_number, digest, request):
-        if self.is_leader:  # Только лидер инициирует Pre-prepare
-            return
-
-        # Сохраняем запрос
-        self.requests[sequence_number] = request
-
-        if sequence_number not in self.prepared:
-            self.prepared[sequence_number] = {}
-        if digest not in self.prepared[sequence_number]:
-            self.prepared[sequence_number][digest] = set()
-
-        self.prepared[sequence_number][digest].add(sender_id)
-
-        # Если это не лидер, рассылаем Prepare
-        if not self.is_leader:
-            for node_id in self.nodes:
-                if node_id != self.node_id:
-                    asyncio.create_task(self.send_message(node_id, 'Prepare', {
-                        'sequence_number': sequence_number,
-                        'digest': digest
-                    }))
-
-    async def prepare(self, sender_id, sequence_number, digest):
-        if sequence_number not in self.prepared:
-            self.prepared[sequence_number] = {}
-        if digest not in self.prepared[sequence_number]:
-            self.prepared[sequence_number][digest] = set()
-
-        self.prepared[sequence_number][digest].add(sender_id)
-
-        # Проверяем, что собрано 2f + 1 подтверждений (f = 1 при N=4)
-        if len(self.prepared[sequence_number][digest]) >= 2 * 1 + 1:  # 2f + 1 = 3
-            # Рассылаем Commit всем узлам
-            for node_id in self.nodes:
-                if node_id != self.node_id:
-                    await self.send_message(node_id, 'Commit', {
-                        'sequence_number': sequence_number,
-                        'digest': digest
-                    })
-            # Локально подтверждаем Commit
-            await self.commit(self.node_id, sequence_number, digest)
-
-    async def commit(self, sender_id, sequence_number, digest):
-        if sequence_number not in self.committed:
-            self.committed[sequence_number] = {}
-        if digest not in self.committed[sequence_number]:
-            self.committed[sequence_number][digest] = set()
-
-        self.committed[sequence_number][digest].add(sender_id)
-
-        # Проверяем кворум (2f + 1 подтверждений)
-        if len(self.committed[sequence_number][digest]) >= 2 * 1 + 1:  # 2f + 1 = 3
-            # Применяем транзакцию, только если она еще не была применена
-            if not hasattr(self, 'applied_transactions'):
-                self.applied_transactions = set()
-            if sequence_number not in self.applied_transactions:
-                self.applied_transactions.add(sequence_number)
-                await self.apply_transaction(sequence_number, digest)
 
     async def broadcast_new_block(self, block, transaction_record, block_db):
         total_nodes = len(self.nodes) + 1
@@ -719,38 +849,6 @@ class Node:
         except Exception as e:
             app.logger.error(f"Error checking node {node_id} availability: {e}")
             return False
-
-
-    async def handle_request(self, sender_id, request_data):
-        try:
-            app.logger.debug(f"Node {self.node_id} handling request from client: {sender_id}")
-            app.logger.debug(f"Request data: {request_data}")
-            self.sequence_number += 1
-            sequence_number = self.sequence_number
-
-            # Добавляем user_id и timestamp в данные запроса
-            request_data['timestamp'] = datetime.now(timezone.utc).isoformat()
-            request_data['user_id'] = sender_id
-            request_string = json.dumps(request_data, sort_keys=True)
-            request_digest = self.generate_digest(request_string.encode('utf-8'))
-
-            self.requests[sequence_number] = request_string
-            app.logger.debug(f"Created request with sequence_number {sequence_number}")
-
-            # Применяем транзакцию
-            success, message = await self.apply_transaction(sequence_number, request_digest)
-
-            if not success:
-                app.logger.error(f"Failed to apply transaction: {message}")
-                return False, message
-
-            if not self.is_leader:
-                self.pre_prepare(self.node_id, sequence_number, request_digest, request_string)
-
-            return True, "Transaction applied successfully."
-        except Exception as e:
-            app.logger.error(f"Error in handle_request: {e}")
-            return False, str(e)
 
     async def apply_transaction(self, sequence_number, digest):
         app.logger.debug(f"Applying transaction {sequence_number} with digest {digest}")
@@ -1573,44 +1671,42 @@ def debug_inventory():
         flash(f"Ошибка при отладке запасов: {e}", 'danger')
         return redirect(url_for('index'))
 
+# Обновляем маршрут index для отправки запроса лидеру
 @app.route('/', methods=['GET', 'POST'])
 @login_required
 async def index():
-    app.logger.debug('Entering index function')
+    current_app.logger.debug('Entering index function')
     connection_status = ""
 
     try:
         db.session.execute(text("SELECT 1"))
         connection_status = "Соединение с базой данных установлено!"
-        app.logger.info(connection_status)
+        current_app.logger.info(connection_status)
     except Exception as e:
         connection_status = f"Ошибка подключения к базе данных: {e}"
-        app.logger.error(connection_status)
+        current_app.logger.error(connection_status)
         flash(connection_status, 'danger')
 
     form = PrihodRashodForm()
     transaction_data = None
 
-    # Получаем записи ПриходРасход и текущие запасы
     try:
         prihod_rashod_records = ПриходРасход.query.order_by(ПриходРасход.ПриходРасходID.desc()).all()
         current_inventory = Запасы.query.all()
-        app.logger.debug(f"Загружено {len(prihod_rashod_records)} записей из базы данных")
+        current_app.logger.debug(f"Загружено {len(prihod_rashod_records)} записей из базы данных")
     except Exception as db_error:
         error_msg = f"Ошибка при загрузке записей из базы данных: {db_error}"
-        app.logger.error(error_msg)
+        current_app.logger.error(error_msg)
         flash(error_msg, 'danger')
         prihod_rashod_records = []
         current_inventory = []
 
     if request.method == 'POST':
-        app.logger.debug(f"POST-запрос получен: {request.form}")
-
-        # Проверяем, является ли запрос AJAX
+        current_app.logger.debug(f"POST-запрос получен: {request.form}")
         is_ajax_request = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
 
         if not form.validate():
-            app.logger.error(f"Ошибки валидации формы: {form.errors}")
+            current_app.logger.error(f"Ошибки валидации формы: {form.errors}")
             if is_ajax_request:
                 return jsonify({
                     'success': False,
@@ -1623,7 +1719,7 @@ async def index():
                                        connection_status=connection_status, transaction_data=transaction_data)
 
         if form.validate_on_submit():
-            app.logger.debug("Форма успешно прошла валидацию")
+            current_app.logger.debug("Форма успешно прошла валидацию")
 
             try:
                 transaction_data = {
@@ -1636,7 +1732,7 @@ async def index():
                     'timestamp': datetime.now(timezone.utc).isoformat()
                 }
 
-                app.logger.debug(f"Сформированы данные транзакции: {transaction_data}")
+                current_app.logger.debug(f"Сформированы данные транзакции: {transaction_data}")
 
                 node_id = None
                 if current_user.role == 'admin':
@@ -1649,52 +1745,43 @@ async def index():
                     node_id = 3
                 else:
                     error_msg = f"Неподдерживаемая роль пользователя: {current_user.role}"
-                    app.logger.error(error_msg)
+                    current_app.logger.error(error_msg)
                     if is_ajax_request:
                         return jsonify({'success': False, 'message': error_msg}), 400
                     else:
                         flash(error_msg, 'danger')
                         return redirect(url_for('index'))
 
-                app.logger.debug(f"Выбран узел {node_id} для обработки транзакции")
+                current_app.logger.debug(f"Выбран узел {node_id} для обработки транзакции")
 
                 if node_id not in nodes:
                     error_msg = f"Узел с ID {node_id} не найден"
-                    app.logger.error(error_msg)
+                    current_app.logger.error(error_msg)
                     if is_ajax_request:
                         return jsonify({'success': False, 'message': error_msg}), 400
                     else:
                         flash(error_msg, 'danger')
                         return redirect(url_for('index'))
 
-                try:
-                    # Функция handle_request должна возвращать кортеж (success, message)
-                    success, message = await nodes[node_id].handle_request(current_user.id, transaction_data)
-                    if success:
-                        app.logger.debug(f"Транзакция успешно отправлена на узел {node_id}")
-                        if is_ajax_request:
-                            # Для AJAX-запроса возвращаем JSON с успехом
-                            return jsonify({'success': True, 'message': 'Запись успешно добавлена'}), 200
-                        else:
-                            flash('Запись успешно добавлена', 'success')
-                    else:
-                        app.logger.error(f"Ошибка при обработке запроса узлом {node_id}: {message}")
-                        if is_ajax_request:
-                            return jsonify(
-                                {'success': False, 'message': f"Ошибка при добавлении записи: {message}"}), 400
-                        else:
-                            flash(f"Ошибка при добавлении записи: {message}", 'danger')
-                except Exception as node_error:
-                    error_msg = f"Ошибка при обработке запроса узлом {node_id}: {node_error}"
-                    app.logger.error(error_msg)
+                # Отправляем запрос на обработку текущему узлу, который перенаправит его лидеру
+                success, message = await nodes[node_id].handle_request(current_user.id, transaction_data)
+                if success:
+                    current_app.logger.debug(f"Транзакция успешно отправлена на узел {node_id}")
                     if is_ajax_request:
-                        return jsonify({'success': False, 'message': error_msg}), 500
+                        return jsonify({'success': True, 'message': 'Запись успешно добавлена'}), 200
                     else:
-                        flash(error_msg, 'danger')
+                        flash('Запись успешно добавлена', 'success')
+                else:
+                    current_app.logger.error(f"Ошибка при обработке запроса узлом {node_id}: {message}")
+                    if is_ajax_request:
+                        return jsonify(
+                            {'success': False, 'message': f"Ошибка при добавлении записи: {message}"}), 400
+                    else:
+                        flash(f"Ошибка при добавлении записи: {message}", 'danger')
 
             except Exception as e:
                 error_msg = f"Ошибка при подготовке транзакции: {e}"
-                app.logger.error(error_msg)
+                current_app.logger.error(error_msg)
                 if is_ajax_request:
                     return jsonify({'success': False, 'message': error_msg}), 500
                 else:
@@ -1703,7 +1790,7 @@ async def index():
             if not is_ajax_request:
                 return redirect(url_for('index'))
 
-    app.logger.debug('Exiting index function')
+    current_app.logger.debug('Exiting index function')
     return render_template('index.html', form=form, records=prihod_rashod_records,
                            inventory=current_inventory,
                            connection_status=connection_status, transaction_data=transaction_data)
@@ -2354,6 +2441,138 @@ def test_verify_block(block_index):
 
 async def start_sync(node):
     await node.sync_blockchain()
+
+# Новый маршрут для обработки запросов смены вида
+@app.route('/request_view_change', methods=['POST'])
+@csrf.exempt
+async def request_view_change():
+    """Обрабатывает запрос на смену вида"""
+    data = request.get_json()
+    if not data or 'view_number' not in data or 'node_id' not in data:
+        current_app.logger.error("Invalid view change request format")
+        return jsonify({'success': False, 'message': 'Invalid view change request format'}), 400
+
+    node = nodes.get(NODE_ID)
+    if not node:
+        current_app.logger.error(f"Node {NODE_ID} not found")
+        return jsonify({'success': False, 'message': 'Node not found'}), 404
+
+    if node.view_change_in_progress:
+        current_app.logger.debug(f"Node {NODE_ID} already processing view change")
+        return jsonify({'status': 'View change already in progress'}), 200
+
+    node.view_change_in_progress = True
+    new_view_number = data['view_number']
+    sender_id = data['node_id']
+
+    if new_view_number <= node.view_number:
+        current_app.logger.warning(f"Node {NODE_ID} rejected view change: proposed view {new_view_number} <= current view {node.view_number}")
+        node.view_change_in_progress = False
+        return jsonify({'success': False, 'message': 'Proposed view number is too low'}), 400
+
+    # Проверяем доступность других узлов и собираем подтверждения
+    tasks = []
+    for node_id, domain in node.nodes.items():
+        if node_id != NODE_ID and node_id != sender_id:
+            url = f"https://{domain}/receive_view_change"
+            payload = {
+                'view_number': new_view_number,
+                'node_id': NODE_ID,
+                'last_block_index': data['last_block_index'],
+                'last_block_hash': data['last_block_hash']
+            }
+            tasks.append(node.send_post_request(node_id, url, payload))
+
+    responses = await asyncio.gather(*tasks, return_exceptions=True)
+    confirmations = 1  # Считаем текущий узел
+    total_nodes = len(node.nodes) + 1
+    required_confirmations = (total_nodes - 1) // 3 * 2 + 1
+
+    for node_id, response in responses:
+        if isinstance(response, Exception):
+            current_app.logger.error(f"Node {node_id} failed to confirm view change: {response}")
+            continue
+        status, body = response
+        if status == 200 and body.get('status') == 'View change confirmed':
+            confirmations += 1
+            current_app.logger.info(f"Node {node_id} confirmed view change to view {new_view_number}")
+
+    if confirmations >= required_confirmations:
+        node.view_number = new_view_number
+        node.is_leader = (node.node_id == new_view_number % total_nodes)
+        current_app.logger.info(f"Node {NODE_ID} view changed to {new_view_number}, is_leader={node.is_leader}")
+        node.view_change_in_progress = False
+        # Сбрасываем таймер для проверки лидера
+        if not node.is_leader:
+            node.start_leader_timeout()
+        return jsonify({'status': 'View change accepted'}), 200
+    else:
+        current_app.logger.warning(f"View change to view {new_view_number} failed: {confirmations}/{required_confirmations}")
+        node.view_change_in_progress = False
+        return jsonify({'success': False, 'message': 'View change not confirmed'}), 400
+
+# Новый маршрут для подтверждения смены вида
+@app.route('/receive_view_change', methods=['POST'])
+@csrf.exempt
+async def receive_view_change():
+    """Обрабатывает подтверждение смены вида от других узлов"""
+    data = request.get_json()
+    if not data or 'view_number' not in data or 'node_id' not in data:
+        current_app.logger.error("Invalid view change confirmation format")
+        return jsonify({'success': False, 'message': 'Invalid view change confirmation format'}), 400
+
+    node = nodes.get(NODE_ID)
+    if not node:
+        current_app.logger.error(f"Node {NODE_ID} not found")
+        return jsonify({'success': False, 'message': 'Node not found'}), 404
+
+    new_view_number = data['view_number']
+    if new_view_number <= node.view_number:
+        current_app.logger.warning(f"Node {NODE_ID} rejected view change confirmation: proposed view {new_view_number} <= current view {node.view_number}")
+        return jsonify({'success': False, 'message': 'Proposed view number is too low'}), 400
+
+    # Проверяем целостность цепочки
+    last_block = node.get_last_block() if node.chain else None
+    if last_block:
+        if data['last_block_index'] > last_block.index:
+            current_app.logger.warning(f"Node {NODE_ID} has outdated chain: local index {last_block.index}, received index {data['last_block_index']}")
+            # Запрашиваем синхронизацию цепочки
+            await node.sync_blockchain()
+        elif data['last_block_hash'] != last_block.hash:
+            current_app.logger.error(f"Node {NODE_ID} detected chain mismatch: local hash {last_block.hash}, received hash {data['last_block_hash']}")
+            return jsonify({'success': False, 'message': 'Chain mismatch'}), 400
+
+    node.view_number = new_view_number
+    node.is_leader = (node.node_id == new_view_number % (len(node.nodes) + 1))
+    current_app.logger.info(f"Node {NODE_ID} confirmed view change to {new_view_number}, is_leader={node.is_leader}")
+    if not node.is_leader:
+        node.start_leader_timeout()
+    return jsonify({'status': 'View change confirmed'}), 200
+
+# Новый маршрут для обработки запросов лидером
+@app.route('/handle_request', methods=['POST'])
+@csrf.exempt
+async def handle_leader_request():
+    """Обрабатывает запрос, перенаправленный нелидеровым узлом"""
+    data = request.get_json()
+    if not data or 'sender_id' not in data or 'request_data' not in data:
+        current_app.logger.error("Invalid request format")
+        return jsonify({'success': False, 'message': 'Invalid request format'}), 400
+
+    node = nodes.get(NODE_ID)
+    if not node:
+        current_app.logger.error(f"Node {NODE_ID} not found")
+        return jsonify({'success': False, 'message': 'Node not found'}), 404
+
+    if not node.is_leader:
+        current_app.logger.error(f"Node {NODE_ID} is not the leader")
+        return jsonify({'success': False, 'message': 'This node is not the leader'}), 400
+
+    success, message = await node.handle_request(data['sender_id'], data['request_data'])
+    if success:
+        return jsonify({'success': True, 'message': message}), 200
+    else:
+        return jsonify({'success': False, 'message': message}), 400
 
 if __name__ == '__main__':
     current_node = nodes[NODE_ID]
