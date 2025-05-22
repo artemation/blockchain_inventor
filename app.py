@@ -268,10 +268,10 @@ class Node:
         if self.view_change_in_progress:
             node_logger.debug(f"Node {self.node_id}: View change already in progress")
             return
-    
+        
         self.view_change_in_progress = True
         node_logger.info(f"Node {self.node_id} initiating view change for view {self.view_number + 1}")
-    
+        
         last_block = self.get_last_block() if self.chain else None
         chain_data = {
             'view_number': self.view_number + 1,
@@ -279,18 +279,18 @@ class Node:
             'last_block_index': last_block.index if last_block else -1,
             'last_block_hash': last_block.hash if last_block else "0"
         }
-    
+        
         tasks = []
         for node_id, domain in self.nodes.items():
             if node_id != self.node_id:
                 url = f"https://{domain}/request_view_change"
                 tasks.append(self.send_post_request(node_id, url, chain_data))
-    
+        
         responses = await asyncio.gather(*tasks, return_exceptions=True)
         confirmations = 1  # Считаем текущий узел
         total_nodes = len(self.nodes) + 1
         required_confirmations = (total_nodes - 1) // 3 * 2 + 1
-    
+        
         for node_id, response in responses:
             if isinstance(response, Exception):
                 node_logger.error(f"Node {node_id} failed to confirm view change: {response}")
@@ -301,7 +301,7 @@ class Node:
                 node_logger.info(f"Node {node_id} confirmed view change to view {self.view_number + 1}")
             else:
                 node_logger.warning(f"Node {node_id} rejected view change: status={status}, body={body}")
-    
+        
         if confirmations >= required_confirmations:
             self.view_number += 1
             self.is_leader = (self.node_id == self.view_number % total_nodes)
@@ -311,6 +311,8 @@ class Node:
         else:
             node_logger.warning(f"View change to view {self.view_number + 1} failed: {confirmations}/{required_confirmations}")
         
+        # Сбрасываем флаг с задержкой, чтобы избежать гонок
+        await asyncio.sleep(1)
         self.view_change_in_progress = False
 
     def shutdown(self):
@@ -655,20 +657,26 @@ class Node:
         
         responses = await asyncio.gather(*tasks, return_exceptions=True)
         max_view_number = self.view_number
-        for response in responses:
+        received_views = []
+        
+        for node_id, response in zip(self.nodes.keys(), responses):
             if isinstance(response, Exception):
-                node_logger.warning(f"Failed to get view number from node: {response}")
+                node_logger.warning(f"Failed to get view number from node {node_id}: {response}")
                 continue
             try:
                 status, body = response
                 if status == 200 and 'view_number' in body:
-                    max_view_number = max(max_view_number, body['view_number'])
-                    node_logger.debug(f"Node {self.node_id} received view number {body['view_number']}")
+                    view_number = body['view_number']
+                    received_views.append((node_id, view_number))
+                    max_view_number = max(max_view_number, view_number)
+                    node_logger.debug(f"Node {self.node_id} received view number {view_number} from node {node_id}")
                 else:
-                    node_logger.warning(f"Invalid response from node: status={status}, body={body}")
+                    node_logger.warning(f"Invalid response from node {node_id}: status={status}, body={body}")
             except ValueError as e:
-                node_logger.error(f"Error unpacking response: {e}, response={response}")
+                node_logger.error(f"Error unpacking response from node {node_id}: {e}, response={response}")
                 continue
+        
+        node_logger.debug(f"Node {self.node_id} sync_view_number: received views {received_views}, max_view_number={max_view_number}")
         
         if max_view_number > self.view_number:
             self.view_number = max_view_number
