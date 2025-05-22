@@ -879,25 +879,20 @@ class Node:
         return hashlib.sha256(data.encode('utf-8')).hexdigest()
 
     def verify_block_integrity(block):
-        """
-        Проверяет целостность блока:
-        1. Совпадает ли вычисленный хэш с сохраненным
-        2. Корректна ли ссылка на предыдущий блок
-        3. Проверяет подписи/подтверждения от других узлов
-        """
         try:
-            # 1. Проверка хэша блока
+            # Проверка хэша блока
+            timestamp_aware = block.timestamp.replace(tzinfo=timezone.utc)
             calculated_hash = hashlib.sha256(json.dumps({
                 'index': block.index,
-                'timestamp': block.timestamp.isoformat(),
-                'transactions': block.transactions,
+                'timestamp': timestamp_aware.isoformat(),
+                'transactions': block.transactions,  # Используем как строку JSON
                 'previous_hash': block.previous_hash
             }, sort_keys=True).encode('utf-8')).hexdigest()
             
             if calculated_hash != block.hash:
                 return False, "Хэш блока не совпадает с вычисленным"
             
-            # 2. Проверка связи с предыдущим блоком (кроме генезис-блока)
+            # Проверка связи с предыдущим блоком (кроме генезис-блока)
             if block.index > 0:
                 prev_block = BlockchainBlock.query.filter_by(
                     index=block.index - 1,
@@ -910,7 +905,7 @@ class Node:
                 if block.previous_hash != prev_block.hash:
                     return False, "Хэш предыдущего блока не совпадает"
             
-            # 3. Проверка подтверждений от других узлов
+            # Проверка подтверждений от других узлов
             confirmations = BlockchainBlock.query.filter_by(
                 index=block.index,
                 hash=block.hash
