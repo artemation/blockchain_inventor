@@ -283,7 +283,8 @@ class Node:
     
     def create_genesis_block(self):
         with app.app_context():
-            with self.genesis_lock:  # Используем блокировку
+            with self.genesis_lock:
+                # Проверяем существование блока
                 existing_genesis = db.session.query(BlockchainBlock).filter_by(index=0, node_id=self.node_id).first()
                 if existing_genesis:
                     app.logger.info(f"Node {self.node_id}: Genesis block already exists")
@@ -294,16 +295,34 @@ class Node:
                         previous_hash=existing_genesis.previous_hash
                     )
                 
-                # Создание нового генезис-блока
+                # Создаем новый генезис-блок с фиксированными корректными данными
+                genesis_transactions = [{
+                    "message": "Genesis Block",
+                    "timestamp": "2025-01-01T00:00:00+00:00"
+                }]
+                
+                # Явно задаем данные для хеширования
+                genesis_data = {
+                    'index': 0,
+                    'timestamp': '2025-01-01T00:00:00+00:00',  # Фиксированная строка
+                    'transactions': genesis_transactions,
+                    'previous_hash': "0"
+                }
+                
+                # Рассчитываем хеш
+                block_string = json.dumps(genesis_data, sort_keys=True, separators=(',', ':')).encode('utf-8')
+                genesis_hash = hashlib.sha256(block_string).hexdigest()
+                
+                # Создаем объект блока
                 genesis = Block(
                     index=0,
                     timestamp=datetime(2025, 1, 1, tzinfo=timezone.utc),
-                    transactions=[{"message": "Genesis Block", "timestamp": "2025-01-01T00:00:00+00:00"}],
+                    transactions=genesis_transactions,
                     previous_hash="0"
                 )
-                genesis.hash = genesis.calculate_hash()
+                genesis.hash = genesis_hash  # Устанавливаем вычисленный хеш
                 
-                # Сохранение в базе данных
+                # Сохраняем в базу данных
                 genesis_db = BlockchainBlock(
                     index=genesis.index,
                     timestamp=genesis.timestamp,
@@ -314,17 +333,18 @@ class Node:
                     confirming_node_id=self.node_id,
                     confirmed=True
                 )
-                db.session.add(genesis_db)
+                
                 try:
+                    db.session.add(genesis_db)
                     db.session.commit()
-                    app.logger.info(f"Node {self.node_id}: Genesis block created")
+                    app.logger.info(f"Node {self.node_id}: Genesis block created with hash {genesis.hash}")
+                    return genesis
                 except sqlalchemy.exc.IntegrityError as e:
                     db.session.rollback()
                     app.logger.warning(f"Node {self.node_id}: Failed to create genesis block due to conflict: {e}")
-                    # Проверяем, существует ли блок после отката
+                    # Повторная проверка после конфликта
                     existing_genesis = db.session.query(BlockchainBlock).filter_by(index=0, node_id=self.node_id).first()
                     if existing_genesis:
-                        app.logger.info(f"Node {self.node_id}: Genesis block already exists after conflict")
                         return Block(
                             index=0,
                             timestamp=existing_genesis.timestamp,
@@ -884,7 +904,32 @@ class Node:
             if not block:
                 return False, "Блок не существует"
             
-            # Нормализация timestamp для вычисления хэша
+            # Для генезис-блока применяем особые правила проверки
+            if block.index == 0:
+                expected_data = {
+                    'index': 0,
+                    'timestamp': '2025-01-01T00:00:00+00:00',
+                    'transactions': [{
+                        "message": "Genesis Block",
+                        "timestamp": "2025-01-01T00:00:00+00:00"
+                    }],
+                    'previous_hash': "0"
+                }
+                
+                # Рассчитываем ожидаемый хеш
+                expected_hash = hashlib.sha256(
+                    json.dumps(expected_data, sort_keys=True, separators=(',', ':')).encode('utf-8')
+                ).hexdigest()
+                
+                if block.hash != expected_hash:
+                    return False, (
+                        f"Неверный хеш генезис-блока. Ожидалось: {expected_hash}, "
+                        f"получено: {block.hash}. Генезис-блок должен иметь фиксированные данные."
+                    )
+                
+                return True, "Генезис-блок достоверен"
+            
+            # Проверка для обычных блоков (остается без изменений)
             normalized_timestamp = block.timestamp.isoformat() if block.timestamp else None
             if block.timestamp and not block.timestamp.tzinfo:
                 normalized_timestamp = datetime.fromtimestamp(block.timestamp.timestamp(), tz=timezone.utc).isoformat()
@@ -902,7 +947,6 @@ class Node:
             if calculated_hash != block.hash:
                 return False, f"Хэш блока не совпадает с вычисленным (ожидалось: {calculated_hash}, получено: {block.hash})"
     
-            # 2. Проверка связи с предыдущим блоком (кроме генезис-блока)
             if block.index > 0:
                 prev_block = BlockchainBlock.query.filter_by(
                     index=block.index - 1,
@@ -915,7 +959,6 @@ class Node:
                 if block.previous_hash != prev_block.hash:
                     return False, f"Хэш предыдущего блока не совпадает (ожидалось: {prev_block.hash}, получено: {block.previous_hash})"
             
-            # 3. Проверка подтверждений от других узлов
             confirmations = BlockchainBlock.query.filter_by(
                 index=block.index,
                 hash=block.hash
