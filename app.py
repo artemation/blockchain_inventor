@@ -265,13 +265,23 @@ class Node:
 
     async def initiate_view_change(self):
         """Инициирует процесс смены вида"""
+        # Ограничиваем частоту попыток смены вида (минимум 2 секунды между попытками)
+        current_time = asyncio.get_event_loop().time()
+        if hasattr(self, 'last_view_change_time') and (current_time - self.last_view_change_time) < 2:
+            node_logger.debug(f"Node {self.node_id}: View change throttled, too soon since last attempt")
+            return
+        self.last_view_change_time = current_time
+    
+        # Проверяем, не выполняется ли уже смена вида
         if self.view_change_in_progress:
             node_logger.debug(f"Node {self.node_id}: View change already in progress")
             return
         
+        # Устанавливаем флаг, чтобы предотвратить параллельные смены вида
         self.view_change_in_progress = True
         node_logger.info(f"Node {self.node_id} initiating view change for view {self.view_number + 1}")
         
+        # Собираем данные о последнем блоке для отправки другим узлам
         last_block = self.get_last_block() if self.chain else None
         chain_data = {
             'view_number': self.view_number + 1,
@@ -280,28 +290,46 @@ class Node:
             'last_block_hash': last_block.hash if last_block else "0"
         }
         
+        # Создаем задачи для отправки запросов на смену вида другим узлам
         tasks = []
         for node_id, domain in self.nodes.items():
             if node_id != self.node_id:
                 url = f"https://{domain}/request_view_change"
                 tasks.append(self.send_post_request(node_id, url, chain_data))
         
-        responses = await asyncio.gather(*tasks, return_exceptions=True)
+        # Выполняем запросы с таймаутом 5 секунд
+        try:
+            responses = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=5.0
+            )
+        except asyncio.TimeoutError:
+            node_logger.warning(f"View change to view {self.view_number + 1} timed out")
+            self.view_change_in_progress = False
+            return
+        
+        # Обрабатываем ответы от узлов
         confirmations = 1  # Считаем текущий узел
         total_nodes = len(self.nodes) + 1
         required_confirmations = (total_nodes - 1) // 3 * 2 + 1
         
-        for node_id, response in responses:
+        for node_id, response in zip(self.nodes.keys(), responses):
+            if node_id == self.node_id:
+                continue
             if isinstance(response, Exception):
                 node_logger.error(f"Node {node_id} failed to confirm view change: {response}")
                 continue
-            status, body = response
-            if status == 200 and body.get('status') == 'View change accepted':
-                confirmations += 1
-                node_logger.info(f"Node {node_id} confirmed view change to view {self.view_number + 1}")
-            else:
-                node_logger.warning(f"Node {node_id} rejected view change: status={status}, body={body}")
+            try:
+                status, body = response
+                if status == 200 and body.get('status') == 'View change accepted':
+                    confirmations += 1
+                    node_logger.info(f"Node {node_id} confirmed view change to view {self.view_number + 1}")
+                else:
+                    node_logger.warning(f"Node {node_id} rejected view change: status={status}, body={body}")
+            except Exception as e:
+                node_logger.error(f"Error processing response from node {node_id}: {e}")
         
+        # Проверяем, достигнут ли консенсус
         if confirmations >= required_confirmations:
             self.view_number += 1
             self.is_leader = (self.node_id == self.view_number % total_nodes)
@@ -311,8 +339,8 @@ class Node:
         else:
             node_logger.warning(f"View change to view {self.view_number + 1} failed: {confirmations}/{required_confirmations}")
         
-        # Сбрасываем флаг с задержкой, чтобы избежать гонок
-        await asyncio.sleep(1)
+        # Сбрасываем флаг через небольшую задержку, чтобы избежать гонок
+        await asyncio.sleep(0.5)
         self.view_change_in_progress = False
 
     def shutdown(self):
@@ -658,6 +686,7 @@ class Node:
         responses = await asyncio.gather(*tasks, return_exceptions=True)
         max_view_number = self.view_number
         received_views = []
+        threshold = 5  # Игнорировать view_number, если разница больше 5
         
         for node_id, response in zip(self.nodes.keys(), responses):
             if isinstance(response, Exception):
@@ -667,9 +696,12 @@ class Node:
                 status, body = response
                 if status == 200 and 'view_number' in body:
                     view_number = body['view_number']
-                    received_views.append((node_id, view_number))
-                    max_view_number = max(max_view_number, view_number)
-                    node_logger.debug(f"Node {self.node_id} received view number {view_number} from node {node_id}")
+                    if view_number >= self.view_number - threshold:  # Игнорируем слишком старые значения
+                        received_views.append((node_id, view_number))
+                        max_view_number = max(max_view_number, view_number)
+                        node_logger.debug(f"Node {self.node_id} received view number {view_number} from node {node_id}")
+                    else:
+                        node_logger.warning(f"Ignored outdated view number {view_number} from node {node_id} (current: {self.view_number})")
                 else:
                     node_logger.warning(f"Invalid response from node {node_id}: status={status}, body={body}")
             except ValueError as e:
@@ -683,6 +715,8 @@ class Node:
             total_nodes = len(self.nodes) + 1
             self.is_leader = (self.node_id == self.view_number % total_nodes)
             node_logger.info(f"Node {self.node_id} updated view_number to {self.view_number}, is_leader={self.is_leader}")
+            if not self.is_leader:
+                self.start_leader_timeout()
     
     async def send_get_request(self, node_id, url):
         """Отправляет GET-запрос к указанному узлу"""
