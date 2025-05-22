@@ -125,7 +125,7 @@ class BlockchainBlock(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     index = db.Column(db.Integer, nullable=False)
-    timestamp = db.Column(db.DateTime, nullable=False)
+    timestamp = db.Column(db.DateTime(timezone=True), nullable=False)
     transactions = db.Column(db.Text, nullable=False)  # JSON строка
     previous_hash = db.Column(db.String(64), nullable=False)
     hash = db.Column(db.String(64), nullable=False, unique=True)
