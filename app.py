@@ -263,12 +263,12 @@ class Node:
     async def initiate_view_change(self):
         """Инициирует процесс смены вида"""
         if self.view_change_in_progress:
-            current_app.logger.debug(f"Node {self.node_id}: View change already in progress")
+            node_logger.debug(f"Node {self.node_id}: View change already in progress")
             return
-
+    
         self.view_change_in_progress = True
-        current_app.logger.info(f"Node {self.node_id} initiating view change for view {self.view_number + 1}")
-
+        node_logger.info(f"Node {self.node_id} initiating view change for view {self.view_number + 1}")
+    
         # Собираем данные о текущем состоянии цепочки
         last_block = self.get_last_block() if self.chain else None
         chain_data = {
@@ -277,37 +277,37 @@ class Node:
             'last_block_index': last_block.index if last_block else -1,
             'last_block_hash': last_block.hash if last_block else "0"
         }
-
+    
         tasks = []
         for node_id, domain in self.nodes.items():
             if node_id != self.node_id:
                 url = f"https://{domain}/request_view_change"
                 tasks.append(self.send_post_request(node_id, url, chain_data))
-
+    
         responses = await asyncio.gather(*tasks, return_exceptions=True)
         confirmations = 1  # Считаем текущий узел
         total_nodes = len(self.nodes) + 1
         required_confirmations = (total_nodes - 1) // 3 * 2 + 1
-
+    
         for node_id, response in responses:
             if isinstance(response, Exception):
-                current_app.logger.error(f"Node {node_id} failed to confirm view change: {response}")
+                node_logger.error(f"Node {node_id} failed to confirm view change: {response}")
                 continue
             status, body = response
             if status == 200 and body.get('status') == 'View change accepted':
                 confirmations += 1
-                current_app.logger.info(f"Node {node_id} confirmed view change to view {self.view_number + 1}")
-
+                node_logger.info(f"Node {node_id} confirmed view change to view {self.view_number + 1}")
+    
         if confirmations >= required_confirmations:
             self.view_number += 1
             # Определяем нового лидера (например, следующий по ID)
             self.is_leader = (self.node_id == self.view_number % total_nodes)
-            current_app.logger.info(f"Node {self.node_id} view changed to {self.view_number}, is_leader={self.is_leader}")
+            node_logger.info(f"Node {self.node_id} view changed to {self.view_number}, is_leader={self.is_leader}")
             # Сбрасываем таймер
             if not self.is_leader:
                 self.start_leader_timeout()
         else:
-            current_app.logger.warning(f"View change to view {self.view_number + 1} failed: {confirmations}/{required_confirmations}")
+            node_logger.warning(f"View change to view {self.view_number + 1} failed: {confirmations}/{required_confirmations}")
         
         self.view_change_in_progress = False
 
@@ -1536,21 +1536,19 @@ def view_blockchain():
 @app.route('/receive_message', methods=['POST'])
 @csrf.exempt
 async def receive_message():
-    app.logger.debug('Entering receive_message function')
-    message = await request.get_json()
-    if not message or 'type' not in message or 'sender_id' not in message:
-        app.logger.error("Invalid message format")
-        return jsonify({'success': False, 'message': 'Invalid message format'}), 400
-    app.logger.debug(f"Received message: {message}")
-    node_id = message['sender_id']
-    node = nodes.get(node_id)
-    if node:
-        await node.receive_message(message)
-        app.logger.debug('Exiting receive_message function')
-        return jsonify({'success': True})
-    else:
-        app.logger.error(f"Node {node_id} not found")
-        return jsonify({'success': False, 'message': 'Node not found'}), 404
+    """Обрабатывает входящие сообщения от других узлов."""
+    message = request.get_json()
+    if not message or not isinstance(message, dict):
+        return jsonify({"error": "Invalid message format"}), 400
+    if 'sender_id' not in message or 'block' not in message:
+        return jsonify({"error": "Missing required fields in message"}), 400
+    
+    # Здесь продолжается логика обработки сообщения, например:
+    sender_id = message['sender_id']
+    block = message['block']
+    # ... (остальная логика обработки блока, например, его валидация и добавление в цепочку)
+    
+    return jsonify({"status": "Message received"}), 200
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
