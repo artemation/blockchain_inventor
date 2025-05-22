@@ -487,6 +487,9 @@
                 <i class="fas fa-link mr-2"></i>Блокчейн (PBFT)
             </h1>
             <div>
+                <button id="verifyChainBtn" class="btn btn-info">
+                    <i class="fas fa-shield-alt mr-2"></i>Проверить цепочку
+                </button>
                 <a href="{{ url_for('index') }}" class="btn btn-secondary">
                     <i class="fas fa-arrow-left mr-2"></i>На главную
                 </a>
@@ -733,6 +736,28 @@
         </div>
     </div>
 
+    <!-- Модальное окно для результатов проверки -->
+    <div class="modal fade" id="verificationModal" tabindex="-1" role="dialog" aria-labelledby="verificationModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="verificationModalLabel">
+                        <i class="fas fa-shield-alt mr-2"></i>Результаты проверки цепочки
+                    </h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body" id="verificationResults">
+                    <!-- Здесь будут отображаться результаты -->
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Закрыть</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
     <!-- Модальное окно для деталей блока -->
     <div class="modal fade" id="blockDetailsModal" tabindex="-1" role="dialog" aria-labelledby="blockDetailsModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-lg" role="document">
@@ -790,6 +815,130 @@
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
     <script>
 
+        function verifyBlockchain() {
+            $('#verificationResults').html('<div class="text-center"><i class="fas fa-spinner fa-spin fa-3x"></i><p>Проверка цепочки...</p></div>');
+            $('#verificationModal').modal('show');
+            
+            let blocks = $('.block-card');
+            let totalBlocks = blocks.length;
+            let verifiedBlocks = 0;
+            let results = [];
+            
+            blocks.each(function() {
+                const blockIndex = $(this).data('block-index');
+                
+                $.get(`/verify_block/${blockIndex}`, function(data) {
+                    if (data.success) {
+                        data.results.forEach(result => {
+                            let statusHtml = result.is_valid ? 
+                                `<span class="badge badge-success">Достоверен</span>` : 
+                                `<span class="badge badge-danger">Недостоверен</span>`;
+                            
+                            results.push(`
+                                <div class="card mb-2 ${result.is_valid ? 'border-success' : 'border-danger'}">
+                                    <div class="card-body">
+                                        <h5 class="card-title">Блок #${result.block_index} (Узел ${result.node_id})</h5>
+                                        <p>${statusHtml} - ${result.message}</p>
+                                        <p class="mb-1"><small>Хэш: <code>${result.hash}</code></small></p>
+                                        <p class="mb-0"><small>Подтверждений: ${result.confirmations}</small></p>
+                                    </div>
+                                </div>
+                            `);
+                        });
+                        
+                        verifiedBlocks++;
+                        
+                        if (verifiedBlocks === totalBlocks) {
+                            // Сортируем результаты по номеру блока
+                            results.sort((a, b) => {
+                                const aIndex = parseInt(a.match(/Блок #(\d+)/)[1]);
+                                const bIndex = parseInt(b.match(/Блок #(\d+)/)[1]);
+                                return aIndex - bIndex;
+                            });
+                            
+                            $('#verificationResults').html(`
+                                <div class="alert alert-info">
+                                    Проверено ${totalBlocks} блоков. ${results.filter(r => r.includes('badge-danger')).length} проблемных блоков.
+                                </div>
+                                ${results.join('')}
+                            `);
+                        }
+                    } else {
+                        $('#verificationResults').html(`
+                            <div class="alert alert-danger">
+                                Ошибка при проверке блока #${blockIndex}: ${data.message}
+                            </div>
+                        `);
+                    }
+                }).fail(function() {
+                    $('#verificationResults').html(`
+                        <div class="alert alert-danger">
+                            Ошибка при запросе проверки блока #${blockIndex}
+                        </div>
+                    `);
+                });
+            });
+        }
+        
+        // Обработчик кнопки проверки
+        $(document).ready(function() {
+            $('#verifyChainBtn').click(verifyBlockchain);
+            
+            // Добавляем кнопку проверки для каждого блока
+            $('.block-card').each(function() {
+                const blockIndex = $(this).data('block-index');
+                $(this).find('.block-header').append(`
+                    <button class="btn btn-sm btn-outline-warning ml-2 verify-block-btn" data-block-index="${blockIndex}">
+                        <i class="fas fa-shield-alt mr-1"></i>Проверить
+                    </button>
+                `);
+            });
+            
+            // Обработчик проверки отдельного блока
+            $(document).on('click', '.verify-block-btn', function() {
+                const blockIndex = $(this).data('block-index');
+                $('#verificationResults').html('<div class="text-center"><i class="fas fa-spinner fa-spin fa-3x"></i><p>Проверка блока...</p></div>');
+                $('#verificationModal').modal('show');
+                
+                $.get(`/verify_block/${blockIndex}`, function(data) {
+                    if (data.success) {
+                        let html = '<h5>Результаты проверки:</h5>';
+                        
+                        data.results.forEach(result => {
+                            let statusHtml = result.is_valid ? 
+                                `<span class="badge badge-success">Достоверен</span>` : 
+                                `<span class="badge badge-danger">Недостоверен</span>`;
+                            
+                            html += `
+                                <div class="card mb-3 ${result.is_valid ? 'border-success' : 'border-danger'}">
+                                    <div class="card-body">
+                                        <h5 class="card-title">Блок #${result.block_index} (Узел ${result.node_id})</h5>
+                                        <p>${statusHtml} - ${result.message}</p>
+                                        <p class="mb-1"><small>Хэш: <code>${result.hash}</code></small></p>
+                                        <p class="mb-0"><small>Подтверждений: ${result.confirmations}</small></p>
+                                    </div>
+                                </div>
+                            `;
+                        });
+                        
+                        $('#verificationResults').html(html);
+                    } else {
+                        $('#verificationResults').html(`
+                            <div class="alert alert-danger">
+                                Ошибка при проверке блока #${blockIndex}: ${data.message}
+                            </div>
+                        `);
+                    }
+                }).fail(function() {
+                    $('#verificationResults').html(`
+                        <div class="alert alert-danger">
+                            Ошибка при запросе проверки блока #${blockIndex}
+                        </div>
+                    `);
+                });
+            });
+        });
+        
         function showBlockDetails(blockIndex) {
             fetch(`/get_block_details/${blockIndex}`)
                 .then(response => response.json())
