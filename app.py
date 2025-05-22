@@ -2256,7 +2256,8 @@ def verify_block(block_index):
         results = []
         for block in blocks:
             try:
-                is_valid, message = verify_block_integrity(block)
+                # Используем метод verify_block_integrity из текущего узла
+                is_valid, message = nodes[NODE_ID].verify_block_integrity(block)
                 results.append({
                     'block_index': block.index,
                     'node_id': block.node_id,
