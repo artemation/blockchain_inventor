@@ -216,32 +216,36 @@ class Block:
         return block
 
 class Node:
+    # Константы для таймеров
+    LEADER_TIMEOUT = 10  # Время ожидания ответа от лидера (в секундах)
+    VIEW_CHANGE_TIMEOUT = 5  # Таймаут для процесса смены вида
+
     def __init__(self, node_id, nodes, host, port):
-            self.node_id = node_id
-            self.nodes = nodes
-            self.host = host
-            self.port = port
-            self.sequence_number = 0
-            self.prepared = {}
-            self.committed = {}
-            self.log = []
-            self.view_number = 0  # Номер текущего вида
-            self.is_leader = (node_id == 0)  # Изначально лидер - узел 0
-            self.requests = {}
-            self.chain = []
-            self.leader_timeout = None  # Таймер для отслеживания активности лидера
-            self.view_change_in_progress = False
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(self.sync_genesis_block())
-            loop.close()
-            # Запускаем таймер для проверки лидера
-            self.start_leader_timeout()
+        self.node_id = node_id
+        self.nodes = nodes
+        self.host = host
+        self.port = port
+        self.sequence_number = 0
+        self.prepared = {}
+        self.committed = {}
+        self.log = []
+        self.view_number = 0  # Номер текущего вида
+        self.is_leader = (node_id == 0)  # Изначально лидер - узел 0
+        self.requests = {}
+        self.chain = []
+        self.leader_timeout = None  # Таймер для отслеживания активности лидера
+        self.view_change_in_progress = False
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(self.sync_genesis_block())
+        loop.close()
+        # Запускаем таймер для проверки лидера
+        self.start_leader_timeout()
 
     def start_leader_timeout(self):
         """Запускает таймер для проверки активности лидера"""
         if not self.is_leader:
-            self.leader_timeout = threading.Timer(LEADER_TIMEOUT, self.check_leader_activity)
+            self.leader_timeout = threading.Timer(self.LEADER_TIMEOUT, self.check_leader_activity)
             self.leader_timeout.start()
             current_app.logger.debug(f"Node {self.node_id} started leader timeout")
 
