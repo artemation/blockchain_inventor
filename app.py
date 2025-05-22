@@ -901,9 +901,7 @@ class Node:
             
             if calculated_hash != block.hash:
                 return False, f"Хэш блока не совпадает с вычисленным (ожидалось: {calculated_hash}, получено: {block.hash})"
-            except Exception as hash_error:
-                return False, f"Ошибка при вычислении хэша: {str(hash_error)}"
-            
+    
             # 2. Проверка связи с предыдущим блоком (кроме генезис-блока)
             if block.index > 0:
                 prev_block = BlockchainBlock.query.filter_by(
@@ -928,7 +926,7 @@ class Node:
             
             if len(confirmations) < required_confirmations:
                 return False, f"Недостаточно подтверждений ({len(confirmations)} из {required_confirmations})"
-                
+    
             return True, "Блок достоверен"
             
         except Exception as e:
