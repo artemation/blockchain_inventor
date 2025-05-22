@@ -215,6 +215,13 @@ class Block:
             block.hash = block_dict['hash']
         return block
 
+# Настройка логгера для класса Node
+node_logger = logging.getLogger('node')
+node_logger.setLevel(logging.DEBUG)
+node_handler = logging.handlers.RotatingFileHandler('node.log', maxBytes=1024*1024, backupCount=5)
+node_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+node_logger.addHandler(node_handler)
+
 class Node:
     # Константы для таймеров
     LEADER_TIMEOUT = 10  # Время ожидания ответа от лидера (в секундах)
@@ -247,7 +254,7 @@ class Node:
         if not self.is_leader:
             self.leader_timeout = threading.Timer(self.LEADER_TIMEOUT, self.check_leader_activity)
             self.leader_timeout.start()
-            current_app.logger.debug(f"Node {self.node_id} started leader timeout")
+            node_logger.debug(f"Node {self.node_id} started leader timeout")
 
     def check_leader_activity(self):
         """Проверяет активность лидера и инициирует смену вида при необходимости"""
