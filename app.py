@@ -890,7 +890,7 @@ class Node:
             calculated_hash = hashlib.sha256(json.dumps({
                 'index': block.index,
                 'timestamp': block.timestamp.isoformat(),
-                'transactions': json.loads(block.transactions),
+                'transactions': block.transactions,
                 'previous_hash': block.previous_hash
             }, sort_keys=True).encode('utf-8')).hexdigest()
             
