@@ -878,6 +878,55 @@ class Node:
         data = str(self.index) + str(self.timestamp) + json.dumps(self.transactions, sort_keys=True) + str(self.previous_hash)
         return hashlib.sha256(data.encode('utf-8')).hexdigest()
 
+    def verify_block_integrity(block):
+        """
+        Проверяет целостность блока:
+        1. Совпадает ли вычисленный хэш с сохраненным
+        2. Корректна ли ссылка на предыдущий блок
+        3. Проверяет подписи/подтверждения от других узлов
+        """
+        try:
+            # 1. Проверка хэша блока
+            calculated_hash = hashlib.sha256(json.dumps({
+                'index': block.index,
+                'timestamp': block.timestamp.isoformat(),
+                'transactions': json.loads(block.transactions),
+                'previous_hash': block.previous_hash
+            }, sort_keys=True).encode('utf-8')).hexdigest()
+            
+            if calculated_hash != block.hash:
+                return False, "Хэш блока не совпадает с вычисленным"
+            
+            # 2. Проверка связи с предыдущим блоком (кроме генезис-блока)
+            if block.index > 0:
+                prev_block = BlockchainBlock.query.filter_by(
+                    index=block.index - 1,
+                    node_id=block.node_id
+                ).first()
+                
+                if not prev_block:
+                    return False, "Предыдущий блок не найден"
+                    
+                if block.previous_hash != prev_block.hash:
+                    return False, "Хэш предыдущего блока не совпадает"
+            
+            # 3. Проверка подтверждений от других узлов
+            confirmations = BlockchainBlock.query.filter_by(
+                index=block.index,
+                hash=block.hash
+            ).all()
+            
+            total_nodes = len(nodes)
+            required_confirmations = (total_nodes // 3 * 2) + 1  # 2f + 1
+            
+            if len(confirmations) < required_confirmations:
+                return False, f"Недостаточно подтверждений ({len(confirmations)} из {required_confirmations})"
+                
+            return True, "Блок достоверен"
+            
+        except Exception as e:
+            return False, f"Ошибка при проверке блока: {str(e)}"
+
 # Создаем узлы блокчейна
 # Используем динамическое создание на основе переменных окружения:
 NODE_ID = int(os.environ.get('NODE_ID', 0))
@@ -2181,6 +2230,31 @@ def debug_blockchain():
         } for b in blocks
     ]
     return jsonify({'blocks': block_data})
+
+@app.route('/verify_block/<int:block_index>')
+@login_required
+def verify_block(block_index):
+    try:
+        blocks = BlockchainBlock.query.filter_by(index=block_index).all()
+        if not blocks:
+            return jsonify({'success': False, 'message': 'Блок не найден'}), 404
+        
+        results = []
+        for block in blocks:
+            is_valid, message = verify_block_integrity(block)
+            results.append({
+                'block_index': block.index,
+                'node_id': block.node_id,
+                'is_valid': is_valid,
+                'message': message,
+                'hash': block.hash,
+                'confirmations': len(BlockchainBlock.query.filter_by(index=block_index, hash=block.hash).all())
+            })
+        
+        return jsonify({'success': True, 'results': results})
+    
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 async def start_sync(node):
     await node.sync_blockchain()
