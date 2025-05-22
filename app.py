@@ -880,30 +880,27 @@ class Node:
 
     @staticmethod
     def verify_block_integrity(block):
-        """
-        Проверяет целостность блока:
-        1. Совпадает ли вычисленный хэш с сохраненным
-        2. Корректна ли ссылка на предыдущий блок
-        3. Проверяет подписи/подтверждения от других узлов
-        """
         try:
             if not block:
                 return False, "Блок не существует"
             
-            # 1. Проверка хэша блока
-            try:
-                block_data = {
-                    'index': block.index,
-                    'timestamp': block.timestamp.isoformat() if block.timestamp else None,
-                    'transactions': json.loads(block.transactions) if block.transactions else [],
-                    'previous_hash': block.previous_hash
-                }
-                calculated_hash = hashlib.sha256(
-                    json.dumps(block_data, sort_keys=True).encode('utf-8')
-                ).hexdigest()
-                
-                if calculated_hash != block.hash:
-                    return False, f"Хэш блока не совпадает с вычисленным (ожидалось: {calculated_hash}, получено: {block.hash})"
+            # Нормализация timestamp для вычисления хэша
+            normalized_timestamp = block.timestamp.isoformat() if block.timestamp else None
+            if block.timestamp and not block.timestamp.tzinfo:
+                normalized_timestamp = datetime.fromtimestamp(block.timestamp.timestamp(), tz=timezone.utc).isoformat()
+    
+            block_data = {
+                'index': block.index,
+                'timestamp': normalized_timestamp,
+                'transactions': json.loads(block.transactions) if block.transactions else [],
+                'previous_hash': block.previous_hash
+            }
+            calculated_hash = hashlib.sha256(
+                json.dumps(block_data, sort_keys=True).encode('utf-8')
+            ).hexdigest()
+            
+            if calculated_hash != block.hash:
+                return False, f"Хэш блока не совпадает с вычисленным (ожидалось: {calculated_hash}, получено: {block.hash})"
             except Exception as hash_error:
                 return False, f"Ошибка при вычислении хэша: {str(hash_error)}"
             
