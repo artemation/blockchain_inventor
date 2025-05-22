@@ -878,6 +878,7 @@ class Node:
         data = str(self.index) + str(self.timestamp) + json.dumps(self.transactions, sort_keys=True) + str(self.previous_hash)
         return hashlib.sha256(data.encode('utf-8')).hexdigest()
 
+    @staticmethod
     def verify_block_integrity(block):
         """
         Проверяет целостность блока:
@@ -925,8 +926,8 @@ class Node:
                 hash=block.hash
             ).all()
             
-            total_nodes = len(NODE_DOMAINS)  # Используем глобальную переменную с узлами
-            required_confirmations = (total_nodes - 1) // 3 * 2 + 1  # 2f + 1
+            total_nodes = len(NODE_DOMAINS)
+            required_confirmations = (total_nodes - 1) // 3 * 2 + 1
             
             if len(confirmations) < required_confirmations:
                 return False, f"Недостаточно подтверждений ({len(confirmations)} из {required_confirmations})"
@@ -2244,7 +2245,6 @@ def debug_blockchain():
 @login_required
 def verify_block(block_index):
     try:
-        # Получаем все блоки с указанным индексом
         blocks = BlockchainBlock.query.filter_by(index=block_index).all()
         if not blocks:
             return jsonify({
@@ -2256,8 +2256,7 @@ def verify_block(block_index):
         results = []
         for block in blocks:
             try:
-                # Используем метод verify_block_integrity из текущего узла
-                is_valid, message = nodes[NODE_ID].verify_block_integrity(block)
+                is_valid, message = Node.verify_block_integrity(block)  # Изменено на вызов статического метода
                 results.append({
                     'block_index': block.index,
                     'node_id': block.node_id,
@@ -2296,7 +2295,6 @@ def verify_block(block_index):
             'error': str(e),
             'block_index': block_index
         }), 500
-
 
 @app.route('/test_verify_block/<int:block_index>')
 def test_verify_block(block_index):
