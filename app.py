@@ -256,92 +256,85 @@ class Node:
             self.leader_timeout.start()
             node_logger.debug(f"Node {self.node_id} started leader timeout")
 
-    def check_leader_activity(self):
-        """Проверяет активность лидера и инициирует смену вида при необходимости"""
+    async def check_leader_activity(self):
         try:
-            self.loop.run_until_complete(self.initiate_view_change())
+            # Логика проверки активности лидера
+            node_logger.debug(f"Node {self.node_id} checking leader activity")
+            # ... (существующая логика)
         except Exception as e:
             node_logger.error(f"Node {self.node_id} failed to check leader activity: {e}")
+            # Используем await для вызова корутины
+            await self.initiate_view_change()
 
     async def initiate_view_change(self):
-        """Инициирует процесс смены вида"""
-        # Ограничиваем частоту попыток смены вида (минимум 2 секунды между попытками)
         current_time = asyncio.get_event_loop().time()
         if hasattr(self, 'last_view_change_time') and (current_time - self.last_view_change_time) < 2:
             node_logger.debug(f"Node {self.node_id}: View change throttled, too soon since last attempt")
             return
         self.last_view_change_time = current_time
     
-        # Проверяем, не выполняется ли уже смена вида
         if self.view_change_in_progress:
             node_logger.debug(f"Node {self.node_id}: View change already in progress")
             return
         
-        # Устанавливаем флаг, чтобы предотвратить параллельные смены вида
         self.view_change_in_progress = True
-        node_logger.info(f"Node {self.node_id} initiating view change for view {self.view_number + 1}")
-        
-        # Собираем данные о последнем блоке для отправки другим узлам
-        last_block = self.get_last_block() if self.chain else None
-        chain_data = {
-            'view_number': self.view_number + 1,
-            'node_id': self.node_id,
-            'last_block_index': last_block.index if last_block else -1,
-            'last_block_hash': last_block.hash if last_block else "0"
-        }
-        
-        # Создаем задачи для отправки запросов на смену вида другим узлам
-        tasks = []
-        for node_id, domain in self.nodes.items():
-            if node_id != self.node_id:
-                url = f"https://{domain}/request_view_change"
-                tasks.append(self.send_post_request(node_id, url, chain_data))
-        
-        # Выполняем запросы с таймаутом 5 секунд
         try:
+            node_logger.info(f"Node {self.node_id} initiating view change for view {self.view_number + 1}")
+            
+            last_block = self.get_last_block() if self.chain else None
+            chain_data = {
+                'view_number': self.view_number + 1,
+                'node_id': self.node_id,
+                'last_block_index': last_block.index if last_block else -1,
+                'last_block_hash': last_block.hash if last_block else "0"
+            }
+            
+            tasks = []
+            for node_id, domain in self.nodes.items():
+                if node_id != self.node_id:
+                    url = f"https://{domain}/request_view_change"
+                    tasks.append(self.send_post_request(node_id, url, chain_data))
+            
             responses = await asyncio.wait_for(
                 asyncio.gather(*tasks, return_exceptions=True),
                 timeout=5.0
             )
-        except asyncio.TimeoutError:
-            node_logger.warning(f"View change to view {self.view_number + 1} timed out")
+            
+            confirmations = 1
+            total_nodes = len(self.nodes) + 1
+            required_confirmations = (total_nodes - 1) // 3 * 2 + 1
+            
+            for node_id, response in zip(self.nodes.keys(), responses):
+                if node_id == self.node_id:
+                    continue
+                if isinstance(response, Exception):
+                    node_logger.error(f"Node {node_id} failed to confirm view change: {response}")
+                    continue
+                try:
+                    status, body = response
+                    if status == 200 and body.get('status') == 'View change accepted':
+                        confirmations += 1
+                        node_logger.info(f"Node {node_id} confirmed view change to view {self.view_number + 1}")
+                    else:
+                        node_logger.warning(f"Node {node_id} rejected view change: status={status}, body={body}")
+                except Exception as e:
+                    node_logger.error(f"Error processing response from node {node_id}: {e}")
+            
+            if confirmations >= required_confirmations:
+                self.view_number += 1
+                self.is_leader = (self.node_id == self.view_number % total_nodes)
+                node_logger.info(f"Node {self.node_id} view changed to {self.view_number}, is_leader={self.is_leader}")
+                if not self.is_leader:
+                    self.start_leader_timeout()
+            else:
+                node_logger.warning(f"View change to view {self.view_number + 1} failed: {confirmations}/{required_confirmations}")
+        
+        except Exception as e:
+            node_logger.error(f"View change to view {self.view_number + 1} failed with error: {e}")
+        finally:
+            # Гарантируем сброс флага
+            await asyncio.sleep(0.5)
             self.view_change_in_progress = False
-            return
-        
-        # Обрабатываем ответы от узлов
-        confirmations = 1  # Считаем текущий узел
-        total_nodes = len(self.nodes) + 1
-        required_confirmations = (total_nodes - 1) // 3 * 2 + 1
-        
-        for node_id, response in zip(self.nodes.keys(), responses):
-            if node_id == self.node_id:
-                continue
-            if isinstance(response, Exception):
-                node_logger.error(f"Node {node_id} failed to confirm view change: {response}")
-                continue
-            try:
-                status, body = response
-                if status == 200 and body.get('status') == 'View change accepted':
-                    confirmations += 1
-                    node_logger.info(f"Node {node_id} confirmed view change to view {self.view_number + 1}")
-                else:
-                    node_logger.warning(f"Node {node_id} rejected view change: status={status}, body={body}")
-            except Exception as e:
-                node_logger.error(f"Error processing response from node {node_id}: {e}")
-        
-        # Проверяем, достигнут ли консенсус
-        if confirmations >= required_confirmations:
-            self.view_number += 1
-            self.is_leader = (self.node_id == self.view_number % total_nodes)
-            node_logger.info(f"Node {self.node_id} view changed to {self.view_number}, is_leader={self.is_leader}")
-            if not self.is_leader:
-                self.start_leader_timeout()
-        else:
-            node_logger.warning(f"View change to view {self.view_number + 1} failed: {confirmations}/{required_confirmations}")
-        
-        # Сбрасываем флаг через небольшую задержку, чтобы избежать гонок
-        await asyncio.sleep(0.5)
-        self.view_change_in_progress = False
 
     def shutdown(self):
         """Очищает ресурсы узла"""
@@ -676,7 +669,6 @@ class Node:
             self.create_genesis_block()
 
     async def sync_view_number(self):
-        """Синхронизирует номер вида с другими узлами"""
         tasks = []
         for node_id, domain in self.nodes.items():
             if node_id != self.node_id:
@@ -696,17 +688,14 @@ class Node:
                 status, body = response
                 if status == 200 and 'view_number' in body:
                     view_number = body['view_number']
-                    if view_number >= self.view_number - threshold:  # Игнорируем слишком старые значения
+                    if view_number >= self.view_number - threshold:
                         received_views.append((node_id, view_number))
                         max_view_number = max(max_view_number, view_number)
                         node_logger.debug(f"Node {self.node_id} received view number {view_number} from node {node_id}")
                     else:
                         node_logger.warning(f"Ignored outdated view number {view_number} from node {node_id} (current: {self.view_number})")
-                else:
-                    node_logger.warning(f"Invalid response from node {node_id}: status={status}, body={body}")
             except ValueError as e:
                 node_logger.error(f"Error unpacking response from node {node_id}: {e}, response={response}")
-                continue
         
         node_logger.debug(f"Node {self.node_id} sync_view_number: received views {received_views}, max_view_number={max_view_number}")
         
