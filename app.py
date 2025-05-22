@@ -878,7 +878,6 @@ class Node:
         data = str(self.index) + str(self.timestamp) + json.dumps(self.transactions, sort_keys=True) + str(self.previous_hash)
         return hashlib.sha256(data.encode('utf-8')).hexdigest()
 
-
 # Создаем узлы блокчейна
 # Используем динамическое создание на основе переменных окружения:
 NODE_ID = int(os.environ.get('NODE_ID', 0))
@@ -2167,13 +2166,6 @@ async def get_chain():
             } for block in chain
         ]
         return jsonify({'chain': chain_data})
-        
-@app.route('/check_blockchain_integrity', methods=['GET'])
-@login_required
-async def check_blockchain_integrity_route():
-    node = Node()  # Или иным способом получите экземпляр Node
-    result = await node.check_blockchain_integrity()
-    return jsonify(result)
 
 @app.route('/debug_blockchain')
 @login_required
