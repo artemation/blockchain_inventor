@@ -2256,6 +2256,66 @@ def verify_block(block_index):
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
+@app.route('/verify_chain')
+@login_required
+def verify_chain():
+    try:
+        # Получаем все блоки, отсортированные по индексу
+        blocks = BlockchainBlock.query.order_by(BlockchainBlock.index.asc()).all()
+        
+        if not blocks:
+            return jsonify({'success': False, 'message': 'Блокчейн пуст'}), 404
+        
+        results = []
+        previous_hash = None
+        
+        for block in blocks:
+            # Проверяем целостность блока
+            is_valid, message = verify_block_integrity(block)
+            
+            # Проверяем связь с предыдущим блоком
+            chain_valid = True
+            if block.index > 0:
+                if block.previous_hash != previous_hash:
+                    is_valid = False
+                    message = "Неверная ссылка на предыдущий блок"
+                    chain_valid = False
+            
+            results.append({
+                'block_index': block.index,
+                'node_id': block.node_id,
+                'is_valid': is_valid,
+                'chain_valid': chain_valid,
+                'message': message,
+                'hash': block.hash,
+                'previous_hash': block.previous_hash,
+                'confirmations': len(BlockchainBlock.query.filter_by(index=block.index, hash=block.hash).all())
+            })
+            
+            previous_hash = block.hash
+        
+        # Проверяем, есть ли пропущенные блоки
+        max_index = blocks[-1].index
+        for i in range(max_index + 1):
+            if not any(b.index == i for b in blocks):
+                results.append({
+                    'block_index': i,
+                    'is_valid': False,
+                    'chain_valid': False,
+                    'message': "Блок отсутствует в цепочке"
+                })
+        
+        return jsonify({
+            'success': True,
+            'results': results,
+            'chain_valid': all(r['is_valid'] and r['chain_valid'] for r in results),
+            'valid_blocks': sum(1 for r in results if r['is_valid'] and r['chain_valid']),
+            'total_blocks': len(results)
+        })
+    
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 async def start_sync(node):
     await node.sync_blockchain()
 
