@@ -252,11 +252,11 @@ class Node:
         self.start_leader_timeout()
 
     def start_leader_timeout(self):
-        """Запускает таймер для проверки активности лидера"""
-        if not self.is_leader:
-            self.leader_timeout = threading.Timer(self.LEADER_TIMEOUT, self.check_leader_activity)
-            self.leader_timeout.start()
-            node_logger.debug(f"Node {self.node_id} started leader timeout")
+            async def periodic_check():
+                while True:
+                    await self.check_leader_activity()
+                    await asyncio.sleep(5)  # Проверять каждые 5 секунд
+            self.loop.create_task(periodic_check())
 
     async def check_leader_activity(self):
         try:
