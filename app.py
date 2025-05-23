@@ -243,6 +243,8 @@ class Node:
         self.chain = []
         self.leader_timeout = None
         self.view_change_in_progress = False
+        self.consensus_times = []  # Список времен достижения консенсуса
+        self.view_change_success = []  # Список результатов смены вида (True/False)
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
         self.loop.run_until_complete(self.sync_genesis_block())
@@ -267,74 +269,59 @@ class Node:
             await self.initiate_view_change()
 
     async def initiate_view_change(self):
-        current_time = asyncio.get_event_loop().time()
-        if hasattr(self, 'last_view_change_time') and (current_time - self.last_view_change_time) < 2:
-            node_logger.debug(f"Node {self.node_id}: View change throttled, too soon since last attempt")
-            return
-        self.last_view_change_time = current_time
-    
+        """Инициирует процесс смены вида"""
         if self.view_change_in_progress:
             node_logger.debug(f"Node {self.node_id}: View change already in progress")
             return
         
         self.view_change_in_progress = True
-        try:
-            node_logger.info(f"Node {self.node_id} initiating view change for view {self.view_number + 1}")
-            
-            last_block = self.get_last_block() if self.chain else None
-            chain_data = {
-                'view_number': self.view_number + 1,
-                'node_id': self.node_id,
-                'last_block_index': last_block.index if last_block else -1,
-                'last_block_hash': last_block.hash if last_block else "0"
-            }
-            
-            tasks = []
-            for node_id, domain in self.nodes.items():
-                if node_id != self.node_id:
-                    url = f"https://{domain}/request_view_change"
-                    tasks.append(self.send_post_request(node_id, url, chain_data))
-            
-            responses = await asyncio.wait_for(
-                asyncio.gather(*tasks, return_exceptions=True),
-                timeout=5.0
-            )
-            
-            confirmations = 1
-            total_nodes = len(self.nodes) + 1
-            required_confirmations = (total_nodes - 1) // 3 * 2 + 1
-            
-            for node_id, response in zip(self.nodes.keys(), responses):
-                if node_id == self.node_id:
-                    continue
-                if isinstance(response, Exception):
-                    node_logger.error(f"Node {node_id} failed to confirm view change: {response}")
-                    continue
-                try:
-                    status, body = response
-                    if status == 200 and body.get('status') == 'View change accepted':
-                        confirmations += 1
-                        node_logger.info(f"Node {node_id} confirmed view change to view {self.view_number + 1}")
-                    else:
-                        node_logger.warning(f"Node {node_id} rejected view change: status={status}, body={body}")
-                except Exception as e:
-                    node_logger.error(f"Error processing response from node {node_id}: {e}")
-            
-            if confirmations >= required_confirmations:
-                self.view_number += 1
-                self.is_leader = (self.node_id == self.view_number % total_nodes)
-                node_logger.info(f"Node {self.node_id} view changed to {self.view_number}, is_leader={self.is_leader}")
-                if not self.is_leader:
-                    self.start_leader_timeout()
-            else:
-                node_logger.warning(f"View change to view {self.view_number + 1} failed: {confirmations}/{required_confirmations}")
+        node_logger.info(f"Node {self.node_id} initiating view change for view {self.view_number + 1}")
         
-        except Exception as e:
-            node_logger.error(f"View change to view {self.view_number + 1} failed with error: {e}")
-        finally:
-            # Гарантируем сброс флага
-            await asyncio.sleep(0.5)
-            self.view_change_in_progress = False
+        last_block = self.get_last_block() if self.chain else None
+        chain_data = {
+            'view_number': self.view_number + 1,
+            'node_id': self.node_id,
+            'last_block_index': last_block.index if last_block else -1,
+            'last_block_hash': last_block.hash if last_block else "0"
+        }
+        
+        tasks = []
+        for node_id, domain in self.nodes.items():
+            if node_id != self.node_id:
+                url = f"https://{domain}/request_view_change"
+                tasks.append(self.send_post_request(node_id, url, chain_data))
+        
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+        confirmations = 1  # Считаем текущий узел
+        total_nodes = len(self.nodes) + 1
+        required_confirmations = (total_nodes - 1) // 3 * 2 + 1
+        
+        for node_id, response in responses:
+            if isinstance(response, Exception):
+                node_logger.error(f"Node {node_id} failed to confirm view change: {response}")
+                continue
+            status, body = response
+            if status == 200 and body.get('status') == 'View change accepted':
+                confirmations += 1
+                node_logger.info(f"Node {node_id} confirmed view change to view {self.view_number + 1}")
+            else:
+                node_logger.warning(f"Node {node_id} rejected view change: status={status}, body={body}")
+        
+        success = confirmations >= required_confirmations
+        self.view_change_success.append(success)
+        if len(self.view_change_success) > 100:
+            self.view_change_success.pop(0)
+        
+        if success:
+            self.view_number += 1
+            self.is_leader = (self.node_id == self.view_number % total_nodes)
+            node_logger.info(f"Node {self.node_id} view changed to {self.view_number}, is_leader={self.is_leader}")
+            if not self.is_leader:
+                self.start_leader_timeout()
+        else:
+            node_logger.warning(f"View change to view {self.view_number + 1} failed: {confirmations}/{required_confirmations}")
+        
+        self.view_change_in_progress = False
 
     def shutdown(self):
         """Очищает ресурсы узла"""
@@ -856,11 +843,12 @@ class Node:
     
 
     async def broadcast_new_block(self, block, transaction_record, block_db):
+        start_time = asyncio.get_event_loop().time()  # Начало замера времени
         total_nodes = len(self.nodes) + 1
         f = (total_nodes - 1) // 3
         required_confirmations = 2 * f + 1
         confirmations = 1  # Считаем текущий узел
-    
+        
         block_dict = {
             'index': block.index,
             'timestamp': block.timestamp.isoformat(),
@@ -869,7 +857,7 @@ class Node:
             'hash': block.hash
         }
         current_app.logger.debug(f"Broadcasting block #{block.index} with hash {block.hash}")
-    
+        
         tasks = []
         for node_id, domain in self.nodes.items():
             if node_id != self.node_id:
@@ -879,7 +867,7 @@ class Node:
                     "block": block_dict
                 }
                 tasks.append(self.send_post_request(node_id, url, payload))
-    
+        
         responses = await asyncio.gather(*tasks, return_exceptions=True)
         for node_id, response in responses:
             if isinstance(response, Exception):
@@ -895,8 +883,14 @@ class Node:
                     current_app.logger.error(f"Node {node_id} failed to confirm block #{block.index}: {body}")
             except Exception as e:
                 current_app.logger.error(f"Error processing response from node {node_id}: {e}")
-    
-        current_app.logger.info(f"Consensus check: {confirmations}/{required_confirmations} confirmations")
+        
+        end_time = asyncio.get_event_loop().time()  # Конец замера времени
+        consensus_time = end_time - start_time
+        self.consensus_times.append(consensus_time)
+        if len(self.consensus_times) > 100:  # Ограничиваем размер списка
+            self.consensus_times.pop(0)
+        
+        current_app.logger.info(f"Consensus check: {confirmations}/{required_confirmations} confirmations, time: {consensus_time:.2f} sec")
         if confirmations >= required_confirmations:
             try:
                 with current_app.app_context():
@@ -922,7 +916,7 @@ class Node:
         else:
             current_app.logger.warning(f"Consensus not reached for block #{block.index}: {confirmations}/{required_confirmations}")
             db.session.rollback()
-    
+        
         return confirmations, total_nodes
 
     # Проверка доступности узла
@@ -939,6 +933,98 @@ class Node:
             app.logger.error(f"Error checking node {node_id} availability: {e}")
             return False
 
+    async def check_nodes_status(self):
+        """Проверяет статус всех узлов, включая текущий"""
+        status = {}
+        headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+        
+        # Собираем задачи для проверки высоты цепочки и view_number всех узлов
+        tasks = []
+        for node_id, domain in self.nodes.items():
+            if node_id != self.node_id:
+                url_height = f"https://{domain}/get_blockchain_height"
+                url_view = f"https://{domain}/get_view_number"
+                tasks.append((node_id, self.send_get_request(node_id, url_height)))
+                tasks.append((node_id, self.send_get_request(node_id, url_view)))
+        
+        # Проверяем текущий узел
+        current_node_id = self.node_id
+        status[current_node_id] = {
+            'is_online': True,  # Изначально предполагаем, что текущий узел онлайн
+            'block_count': None,
+            'view_number': self.view_number,
+            'is_leader': self.is_leader,
+            'host': self.host,
+            'port': self.port
+        }
+        
+        # Проверяем доступность текущего узла через внутренний запрос
+        try:
+            async with aiohttp.ClientSession(headers=headers) as session:
+                url = f"https://{self.host}:{self.port}/health"
+                async with session.get(url, timeout=5) as response:
+                    status[current_node_id]['is_online'] = (response.status == 200)
+        except Exception as e:
+            node_logger.error(f"Current node {current_node_id} is offline: {e}")
+            status[current_node_id]['is_online'] = False
+        
+        # Выполняем запросы к другим узлам
+        responses = await asyncio.gather(*[task[1] for task in tasks], return_exceptions=True)
+        
+        # Обрабатываем результаты
+        for i, (node_id, _) in enumerate(tasks):
+            response = responses[i]
+            if node_id not in status:
+                status[node_id] = {
+                    'is_online': False,
+                    'block_count': None,
+                    'view_number': None,
+                    'is_leader': False,
+                    'host': self.nodes[node_id].split(':')[0] if ':' in self.nodes[node_id] else self.nodes[node_id],
+                    'port': self.nodes[node_id].split(':')[1] if ':' in self.nodes[node_id] else '443'
+                }
+            
+            if isinstance(response, Exception):
+                node_logger.warning(f"Failed to get data from node {node_id}: {response}")
+                continue
+            
+            try:
+                status_code, body = response
+                if status_code == 200:
+                    status[node_id]['is_online'] = True
+                    if 'height' in body:
+                        status[node_id]['block_count'] = body['height']
+                    if 'view_number' in body:
+                        status[node_id]['view_number'] = body['view_number']
+                        # Определяем лидера
+                        total_nodes = len(self.nodes) + 1
+                        status[node_id]['is_leader'] = (node_id == body['view_number'] % total_nodes)
+                else:
+                    node_logger.warning(f"Invalid response from node {node_id}: status={status_code}, body={body}")
+            except Exception as e:
+                node_logger.error(f"Error processing response from node {node_id}: {e}")
+        
+        # Получаем количество блоков для текущего узла из базы
+        with current_app.app_context():
+            status[current_node_id]['block_count'] = db.session.query(BlockchainBlock).filter_by(node_id=current_node_id).count()
+        
+        node_logger.debug(f"Nodes status: {status}")
+        return status
+
+    def get_network_stats(self):
+        """Возвращает статистику сети"""
+        avg_consensus_time = sum(self.consensus_times) / len(self.consensus_times) if self.consensus_times else 0
+        tps = len(self.consensus_times) / (sum(self.consensus_times) or 1)  # Транзакций в секунду
+        view_change_success_rate = (sum(self.view_change_success) / len(self.view_change_success) * 100) if self.view_change_success else 0
+        
+        return {
+            'avg_consensus_time': round(avg_consensus_time, 2),
+            'tps': round(tps, 2),
+            'view_change_success_rate': round(view_change_success_rate, 2),
+            'consensus_times': self.consensus_times[-10:],  # Последние 10 значений для графика
+            'view_change_success': self.view_change_success[-10:]  # Последние 10 результатов
+        }
+    
     async def apply_transaction(self, sequence_number, digest):
         app.logger.debug(f"Applying transaction {sequence_number} with digest {digest}")
     
@@ -2316,40 +2402,28 @@ def get_item_info(item_id):
 @app.route('/nodes_status')
 @login_required
 async def nodes_status():
-    nodes_info = []
-    for node_id, node in nodes.items():
-        # Для текущего узла (node_id=0) всегда возвращаем True
-        if node_id == 0:
-            is_online = True
-        else:
-            try:
-                # Используем асинхронную проверку с таймаутом
-                async with aiohttp.ClientSession() as session:
-                    url = f"https://{node.host}:{node.port}/health"
-                    try:
-                        async with session.get(url, timeout=5) as response:
-                            is_online = response.status == 200
-                    except (aiohttp.ClientError, asyncio.TimeoutError):
-                        is_online = False
-            except Exception as e:
-                app.logger.error(f"Error checking node {node_id} status: {e}")
-                is_online = False
-        
-        # Получаем количество блоков
-        with app.app_context():
-            block_count = BlockchainBlock.query.filter_by(node_id=node_id).count()
-
-        nodes_info.append({
+    node = nodes.get(NODE_ID)
+    if not node:
+        app.logger.error(f"Node {NODE_ID} not found")
+        return jsonify({'error': 'Node not found'}), 404
+    nodes_status = await node.check_nodes_status()
+    nodes_info = [
+        {
             'node_id': node_id,
-            'host': node.host,
-            'port': node.port,
-            'is_online': is_online,
-            'block_count': block_count,
-            'is_leader': node_id == 0
-        })
+            'host': info['host'],
+            'port': info['port'],
+            'block_count': info['block_count'],
+            'is_online': info['is_online'],
+            'is_leader': info['is_leader']
+        }
+        for node_id, info in nodes_status.items()
+    ]
+    network_stats = node.get_network_stats()
+    return render_template('nodes_status.html', nodes=nodes_info, network_stats=network_stats)
+Преимущества:
 
-    return render_template('nodes_status.html', nodes=nodes_info)
-
+Проверка статуса узла 0 через HTTP.
+Полная информация о статусе (включая view_number, is_leader).
 
 @app.route('/get_block_details/<int:block_index>')
 def get_block_details(block_index):
