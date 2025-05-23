@@ -259,23 +259,41 @@ class Node:
             self.loop.create_task(periodic_check())
 
     async def check_leader_activity(self):
+        """
+        Периодически проверяет активность лидера через запрос к /health.
+        Если лидер недоступен, инициирует процесс смены лидера.
+        """
         try:
-            # Логика проверки активности лидера
-            node_logger.debug(f"Node {self.node_id} checking leader activity")
-            # ... (существующая логика)
+            # Определяем ID лидера
+            leader_id = self.view_number % (len(self.nodes) + 1)
+            if leader_id == self.node_id:
+                node_logger.debug(f"Узел {self.node_id} является лидером, проверка активности не требуется")
+                return
+    
+            node_logger.debug(f"Узел {self.node_id} проверяет активность лидера {leader_id}")
+            url = f"https://{self.nodes[leader_id]}/health"
+    
+            # Выполняем HTTP-запрос к эндпоинту /health лидера
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        node_logger.debug(f"Лидер {leader_id} активен, статус ответа: {response.status}")
+                    else:
+                        node_logger.warning(f"Лидер {leader_id} не отвечает, статус ответа: {response.status}")
+                        node_logger.info(f"Узел {self.node_id} инициирует смену лидера")
+                        await self.initiate_view_change()
+    
         except Exception as e:
-            node_logger.error(f"Node {self.node_id} failed to check leader activity: {e}")
-            # Используем await для вызова корутины
+            node_logger.error(f"Узел {self.node_id} не смог проверить активность лидера {leader_id}: {str(e)}")
+            node_logger.info(f"Узел {self.node_id} инициирует смену лидера из-за ошибки")
             await self.initiate_view_change()
 
     async def initiate_view_change(self):
-        """Инициирует процесс смены вида"""
         if self.view_change_in_progress:
-            node_logger.debug(f"Node {self.node_id}: View change already in progress")
+            node_logger.debug(f"Узел {self.node_id}: смена лидера уже выполняется")
             return
-        
         self.view_change_in_progress = True
-        node_logger.info(f"Node {self.node_id} initiating view change for view {self.view_number + 1}")
+        node_logger.info(f"Узел {self.node_id} инициирует смену лидера для view {self.view_number + 1}")
         
         last_block = self.get_last_block() if self.chain else None
         chain_data = {
@@ -332,43 +350,76 @@ class Node:
         node_logger.info(f"Node {self.node_id} shut down")
 
     async def handle_request(self, sender_id, request_data):
-        """Обрабатывает запрос клиента, перенаправляя его лидеру, если текущий узел не лидер"""
+        """
+        Обрабатывает запрос клиента, перенаправляя его лидеру, если текущий узел не лидер.
+        Аргументы:
+            sender_id: ID пользователя, отправившего запрос.
+            request_data: Данные транзакции.
+        Возвращает:
+            Кортеж (success: bool, message: str) с результатом обработки.
+        """
         try:
-            current_app.logger.debug(f"Node {self.node_id} handling request from client: {sender_id}")
-            current_app.logger.debug(f"Request data: {request_data}")
-
+            current_app.logger.debug(f"Узел {self.node_id} обрабатывает запрос от клиента: {sender_id}")
+            current_app.logger.debug(f"Данные запроса: {request_data}")
+    
+            # Синхронизируем view_number перед определением лидера
+            await self.sync_view_number()
+            current_app.logger.debug(f"Узел {self.node_id} имеет view_number: {self.view_number}")
+    
             if not self.is_leader:
-                # Перенаправляем запрос лидеру
+                # Определяем ID лидера
                 leader_id = self.view_number % (len(self.nodes) + 1)
+                current_app.logger.debug(f"Узел {self.node_id} перенаправляет запрос лидеру {leader_id}")
+    
                 if leader_id in self.nodes:
                     url = f"https://{self.nodes[leader_id]}/handle_request"
-                    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
-                        async with session.post(url, json={'sender_id': sender_id, 'request_data': request_data}) as response:
-                            if response.status == 200:
-                                current_app.logger.debug(f"Request forwarded to leader node {leader_id}")
-                                return True, "Request forwarded to leader"
-                            else:
-                                current_app.logger.error(f"Failed to forward request to leader {leader_id}: {await response.text()}")
-                                return False, "Failed to forward request to leader"
+                    payload = {'sender_id': sender_id, 'request_data': request_data}
+    
+                    # Пытаемся перенаправить запрос с повторными попытками
+                    @retry(stop=stop_after_attempt(3), wait=wait_fixed(1))
+                    async def send_to_leader():
+                        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
+                            async with session.post(url, json=payload) as response:
+                                if response.status == 200:
+                                    current_app.logger.debug(f"Запрос успешно перенаправлен лидеру {leader_id}")
+                                    return True, "Запрос перенаправлен лидеру"
+                                else:
+                                    error_text = await response.text()
+                                    current_app.logger.error(f"Ошибка перенаправления лидеру {leader_id}: {error_text}")
+                                    raise Exception(f"Ошибка HTTP {response.status}: {error_text}")
+    
+                    try:
+                        success, message = await send_to_leader()
+                        return success, message
+                    except Exception as e:
+                        current_app.logger.error(f"Не удалось перенаправить запрос лидеру {leader_id}: {str(e)}")
+                        # Инициируем смену лидера
+                        current_app.logger.info(f"Узел {self.node_id} инициирует смену лидера")
+                        await self.initiate_view_change()
+                        return False, f"Не удалось перенаправить запрос лидеру, инициирована смена лидера: {str(e)}"
                 else:
-                    current_app.logger.error(f"Leader node {leader_id} not found")
-                    return False, "Leader node not found"
-
-            # Если текущий узел - лидер, обрабатываем запрос
+                    current_app.logger.error(f"Лидер с ID {leader_id} не найден в списке узлов")
+                    # Инициируем смену лидера
+                    current_app.logger.info(f"Узел {self.node_id} инициирует смену лидера")
+                    await self.initiate_view_change()
+                    return False, "Лидер не найден, инициирована смена лидера"
+    
+            # Если текущий узел является лидером, обрабатываем запрос
+            current_app.logger.info(f"Узел {self.node_id} является лидером, обрабатывает запрос")
             self.sequence_number += 1
             sequence_number = self.sequence_number
-
+    
             # Добавляем user_id, timestamp и view_number в данные запроса
             request_data['timestamp'] = datetime.now(timezone.utc).isoformat()
             request_data['user_id'] = sender_id
             request_data['view_number'] = self.view_number
             request_string = json.dumps(request_data, sort_keys=True)
             request_digest = self.generate_digest(request_string.encode('utf-8'))
-
+    
             self.requests[sequence_number] = request_string
-            current_app.logger.debug(f"Created request with sequence_number {sequence_number}")
-
-            # Отправляем Pre-prepare сообщение всем узлам
+            current_app.logger.debug(f"Создан запрос с номером последовательности {sequence_number}")
+    
+            # Отправляем Pre-prepare сообщения всем узлам
             for node_id in self.nodes:
                 if node_id != self.node_id:
                     await self.send_message(node_id, 'Pre-prepare', {
@@ -377,20 +428,22 @@ class Node:
                         'request': request_string,
                         'view_number': self.view_number
                     })
-
+    
             # Локально выполняем Pre-prepare
             self.pre_prepare(self.node_id, sequence_number, request_digest, request_string)
-
+    
             # Применяем транзакцию
             success, message = await self.apply_transaction(sequence_number, request_digest)
             if not success:
-                current_app.logger.error(f"Failed to apply transaction: {message}")
+                current_app.logger.error(f"Не удалось применить транзакцию: {message}")
                 return False, message
-
-            return True, "Transaction applied successfully."
+    
+            current_app.logger.info(f"Транзакция {sequence_number} успешно применена")
+            return True, "Транзакция успешно применена"
+    
         except Exception as e:
-            current_app.logger.error(f"Error in handle_request: {e}")
-            return False, str(e)
+            current_app.logger.error(f"Ошибка в handle_request на узле {self.node_id}: {str(e)}", exc_info=True)
+            return False, f"Неожиданная ошибка: {str(e)}"
 
     def pre_prepare(self, sender_id, sequence_number, digest, request):
         """Обрабатывает Pre-prepare сообщение, только если от лидера и view_number совпадает"""
