@@ -26,7 +26,7 @@ import time
 from functools import wraps
 from threading import Lock
 import atexit
-
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 load_dotenv()
 # Определяем NODE_ID в начале
