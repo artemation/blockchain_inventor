@@ -6,6 +6,7 @@
     <title>Статус узлов</title>
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
     <style>
         :root {
@@ -31,7 +32,7 @@
             line-height: 1.6;
         }
 
-        /* Боковая панель */
+        /* Стили для боковой панели */
         .sidebar {
             width: var(--sidebar-width);
             background: linear-gradient(312deg, var(--dark-color), #2a2ab1);
@@ -55,6 +56,12 @@
             width: 80%;
             max-width: 180px;
             height: auto;
+            transition: all 0.3s;
+        }
+
+        .sidebar .logo:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 10px rgba(67, 97, 238, 0.7);
         }
 
         .sidebar .nav-link {
@@ -78,26 +85,29 @@
         .sidebar .nav-link:hover {
             color: white;
             background: rgba(255, 255, 255, 0.1);
+            transform: translateX(5px);
         }
 
         .sidebar .nav-link.active {
             background: var(--primary-color);
             color: white;
+            box-shadow: 0 4px 12px rgba(67, 97, 238, 0.3);
         }
 
         /* Основной контент */
         .main-content {
             margin-left: var(--sidebar-width);
-            padding: 20px;
+            padding: 30px;
             width: calc(100% - var(--sidebar-width));
+            transition: all 0.3s;
         }
 
         .page-header {
             background: white;
-            padding: 15px 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-            margin-bottom: 20px;
+            padding: 25px 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            margin-bottom: 30px;
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -107,29 +117,55 @@
             color: var(--dark-color);
             font-weight: 700;
             margin: 0;
-            font-size: 1.5rem;
+            font-size: 1.8rem;
         }
 
-        /* Компактные карточки узлов */
-        .nodes-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-            gap: 15px;
-            margin-bottom: 20px;
+        .user-info {
+            display: flex;
+            align-items: center;
         }
 
-        .node-card {
+        .user-info .badge {
+            background: var(--accent-color);
+            padding: 8px 12px;
+            border-radius: 20px;
+            font-weight: 500;
+            font-size: 0.85rem;
+        }
+
+        .card {
+            border: none;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            margin-bottom: 30px;
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+        }
+
+        .card-header {
             background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
-            padding: 15px;
-            border-left: 4px solid var(--accent-color);
-            transition: all 0.2s;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+            padding: 18px 25px;
+            border-radius: 10px 10px 0 0 !important;
+            font-weight: 600;
+            color: var(--dark-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
 
-        .node-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+        .card-body {
+            padding: 25px;
+        }
+
+        /* Специфичные стили для страницы статуса узлов */
+        .node-card {
+            border-left: 4px solid var(--accent-color);
+            transition: all 0.3s;
         }
 
         .node-card.leader {
@@ -138,99 +174,125 @@
 
         .node-card.offline {
             border-left-color: var(--danger-color);
-            opacity: 0.8;
-        }
-
-        .node-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
-        }
-
-        .node-title {
-            font-weight: 600;
-            margin: 0;
-            font-size: 1rem;
-        }
-
-        .node-status {
-            display: flex;
-            align-items: center;
         }
 
         .status-indicator {
-            width: 10px;
-            height: 10px;
+            width: 12px;
+            height: 12px;
             border-radius: 50%;
-            margin-right: 6px;
+            display: inline-block;
+            margin-right: 8px;
         }
 
         .status-online {
             background-color: var(--success-color);
+            box-shadow: 0 0 8px rgba(76, 201, 240, 0.5);
         }
 
         .status-offline {
             background-color: var(--danger-color);
         }
 
-        .node-details {
-            font-size: 0.85rem;
-        }
-
-        .node-detail {
+        .node-stats {
             display: flex;
             justify-content: space-between;
-            margin-bottom: 5px;
+            margin-top: 15px;
         }
 
-        .detail-label {
-            color: #666;
+        .stat-item {
+            text-align: center;
+            flex: 1;
+            padding: 0 5px;
         }
 
-        .detail-value {
-            font-weight: 500;
-        }
-
-        /* Графики */
-        .chart-container {
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
-            padding: 15px;
-            margin-bottom: 20px;
-        }
-
-        .chart-title {
-            font-size: 1rem;
-            font-weight: 600;
-            margin-bottom: 15px;
+        .stat-value {
+            font-size: 1.3rem;
+            font-weight: 700;
             color: var(--dark-color);
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .node-info {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .node-icon {
+            font-size: 1.5rem;
+            margin-right: 10px;
+            color: var(--accent-color);
+        }
+
+        .node-icon.leader {
+            color: var(--warning-color);
+        }
+
+        .progress-thin {
+            height: 5px;
+        }
+
+        .consensus-progress {
+            margin-top: 15px;
         }
 
         /* Адаптивность */
         @media (max-width: 992px) {
             .sidebar {
                 width: 80px;
-                padding: 10px 5px;
+                overflow: hidden;
             }
+
+            .sidebar .logo-container {
+                padding: 15px 5px;
+            }
+
+            .sidebar .logo {
+                width: 50px;
+            }
+
             .sidebar .nav-link span {
                 display: none;
             }
+
             .sidebar .nav-link i {
                 margin-right: 0;
-                font-size: 1.2rem;
+                font-size: 1.3rem;
             }
+
             .main-content {
                 margin-left: 80px;
                 width: calc(100% - 80px);
-                padding: 15px;
             }
         }
 
         @media (max-width: 768px) {
-            .nodes-grid {
-                grid-template-columns: 1fr;
+            .page-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .user-info {
+                margin-top: 15px;
+            }
+
+            .card-body {
+                padding: 20px;
+            }
+
+            .node-stats {
+                flex-direction: column;
+            }
+
+            .stat-item {
+                margin-bottom: 10px;
+                text-align: left;
             }
         }
     </style>
@@ -241,55 +303,57 @@
         <div class="logo-container">
             <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Логотип" class="logo">
         </div>
-        <nav>
-            <ul class="navbar-nav">
-                <li class="nav-item">
-                    <a class="nav-link" href="/">
-                        <i class="fas fa-home"></i>
-                        <span>Главная</span>
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link" href="/blockchain">
-                        <i class="fas fa-link"></i>
-                        <span>Блокчейн</span>
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link active" href="/nodes_status">
-                        <i class="fas fa-server"></i>
-                        <span>Статус узлов</span>
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link" href="/admin">
-                        <i class="fas fa-cog"></i>
-                        <span>Администрирование</span>
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link" href="/test_transaction">
-                        <i class="fas fa-vial"></i>
-                        <span>Тест транзакции</span>
-                    </a>
-                </li>
-            </ul>
+        <nav class="navbar navbar-expand-lg navbar-dark">
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav flex-column">
+                    <li class="nav-item">
+                        <a class="nav-link" href="/">
+                            <i class="fas fa-home"></i>
+                            <span>Главная</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/blockchain">
+                            <i class="fas fa-link"></i>
+                            <span>Блокчейн</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link active" href="/nodes_status">
+                            <i class="fas fa-server"></i>
+                            <span>Статус узлов</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/admin">
+                            <i class="fas fa-cog"></i>
+                            <span>Администрирование</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/test_transaction">
+                            <i class="fas fa-vial"></i>
+                            <span>Тест транзакции</span>
+                        </a>
+                    </li>
+                </ul>
+            </div>
         </nav>
     </div>
 
     <!-- Основной контент -->
     <div class="main-content">
-        <div class="page-header">
+        <div class="page-header fade-in">
             <h1 class="page-title">
                 <i class="fas fa-server mr-2"></i>Статус узлов сети
             </h1>
             <div class="user-info">
                 {% if current_user.is_authenticated %}
-                    <span class="badge bg-primary">
+                    <span class="badge">
                         <i class="fas fa-user-circle mr-2"></i>
                         {{ current_user.username }}
                     </span>
-                    <a href="/logout" class="btn btn-sm btn-outline-danger ml-2">
+                    <a href="/logout" class="btn btn-sm btn-outline-danger ml-3">
                         <i class="fas fa-sign-out-alt"></i>
                     </a>
                 {% else %}
@@ -303,109 +367,108 @@
             </div>
         </div>
 
-        <!-- Компактные карточки узлов -->
-        <div class="nodes-grid">
+        <div class="row">
             {% for node in nodes %}
-            <div class="node-card {% if node.is_leader %}leader{% endif %} {% if not node.is_online %}offline{% endif %}">
-                <div class="node-header">
-                    <h3 class="node-title">
-                        <i class="fas {% if node.is_leader %}fa-crown text-warning{% else %}fa-server{% endif %}"></i>
-                        Узел #{{ node.node_id }}
-                    </h3>
-                    <div class="node-status">
+            <div class="col-lg-6 mb-4">
+                <div class="card node-card {% if node.is_leader %}leader{% endif %} {% if not node.is_online %}offline{% endif %}">
+                    <div class="card-header">
+                        <div class="node-info">
+                            <i class="node-icon fas {% if node.is_leader %}fa-crown leader{% else %}fa-server{% endif %}"></i>
+                            <div>
+                                <h5 class="mb-0">Узел #{{ node.node_id }}</h5>
+                                <small class="text-muted">{{ node.host }}:{{ node.port }}</small>
+                            </div>
+                        </div>
                         <span class="status-indicator {% if node.is_online %}status-online{% else %}status-offline{% endif %}"></span>
-                        <small>{% if node.is_online %}Online{% else %}Offline{% endif %}</small>
                     </div>
-                </div>
-                <div class="node-details">
-                    <div class="node-detail">
-                        <span class="detail-label">Блоков:</span>
-                        <span class="detail-value">{{ node.block_count }}</span>
-                    </div>
-                    <div class="node-detail">
-                        <span class="detail-label">Роль:</span>
-                        <span class="detail-value">
-                            {% if node.is_leader %}
-                                <span class="text-warning">Лидер</span>
-                            {% elif node.node_id == 1 %}
-                                Север
-                            {% elif node.node_id == 2 %}
-                                Юг
-                            {% elif node.node_id == 3 %}
-                                Запад
-                            {% else %}
-                                Участник
-                            {% endif %}
-                        </span>
-                    </div>
-                    <div class="node-detail">
-                        <span class="detail-label">Адрес:</span>
-                        <span class="detail-value text-truncate">{{ node.host }}</span>
+                    <div class="card-body">
+                        <div class="node-stats">
+                            <div class="stat-item">
+                                <div class="stat-value">{{ node.block_count }}</div>
+                                <div class="stat-label">Блоков</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-value">
+                                    {% if node.is_online %}
+                                    <span class="text-success">Online</span>
+                                    {% else %}
+                                    <span class="text-danger">Offline</span>
+                                    {% endif %}
+                                </div>
+                                <div class="stat-label">Статус</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-value">
+                                    {% if node.is_leader %}
+                                    <span class="text-warning">Лидер</span>
+                                    {% elif node.node_id == 1 %}
+                                    <span class="text-info">Север</span>
+                                    {% elif node.node_id == 2 %}
+                                    <span class="text-info">Юг</span>
+                                    {% elif node.node_id == 3 %}
+                                    <span class="text-info">Запад</span>
+                                    {% else %}
+                                    <span class="text-info">Участник</span>
+                                    {% endif %}
+                                </div>
+                                <div class="stat-label">Роль</div>
+                            </div>
+                        </div>
+
+                        <div class="consensus-progress">
+                            <small class="d-block mb-2">Скорость консенсуса: <strong>{{ network_stats.avg_consensus_time }} сек</strong></small>
+                            <div class="progress progress-thin">
+                                <div class="progress-bar bg-success" role="progressbar" style="width: {{ 100 - (network_stats.avg_consensus_time * 50) }}%" 
+                                     aria-valuenow="{{ 100 - (network_stats.avg_consensus_time * 50) }}" aria-valuemin="0" aria-valuemax="100"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
             {% endfor %}
         </div>
 
-        <!-- Статистика сети -->
-        <div class="chart-container">
-            <h3 class="chart-title"><i class="fas fa-chart-line mr-2"></i>Статистика сети</h3>
-            <div class="row">
-                <div class="col-md-4">
-                    <div class="card bg-light mb-3">
-                        <div class="card-body">
-                            <h5 class="card-title">Среднее время консенсуса</h5>
-                            <p class="card-text display-6">{{ "%.2f"|format(network_stats.avg_consensus_time) }} сек</p>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-4">
-                    <div class="card bg-light mb-3">
-                        <div class="card-body">
-                            <h5 class="card-title">Транзакций в секунду</h5>
-                            <p class="card-text display-6">{{ "%.1f"|format(network_stats.tps) }}</p>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-4">
-                    <div class="card bg-light mb-3">
-                        <div class="card-body">
-                            <h5 class="card-title">Успешность смены лидера</h5>
-                            <p class="card-text display-6">{{ "%.0f"|format(network_stats.view_change_success_rate) }}%</p>
-                        </div>
-                    </div>
-                </div>
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-chart-line mr-2"></i>Статистика сети</h5>
             </div>
-        </div>
-
-        <!-- Графики -->
-        <div class="row">
-            <div class="col-md-6">
-                <div class="chart-container">
-                    <h3 class="chart-title"><i class="fas fa-clock mr-2"></i>Время консенсуса</h3>
-                    <canvas id="consensusTimeChart"></canvas>
+            <div class="card-body">
+                <div class="row mb-4">
+                    <div class="col-md-4">
+                        <p><strong>Среднее время консенсуса:</strong> {{ network_stats.avg_consensus_time }} сек</p>
+                    </div>
+                    <div class="col-md-4">
+                        <p><strong>Транзакций в секунду (TPS):</strong> {{ network_stats.tps }}</p>
+                    </div>
+                    <div class="col-md-4">
+                        <p><strong>Успешность смены вида:</strong> {{ network_stats.view_change_success_rate }}%</p>
+                    </div>
                 </div>
-            </div>
-            <div class="col-md-6">
-                <div class="chart-container">
-                    <h3 class="chart-title"><i class="fas fa-exchange-alt mr-2"></i>Смена лидеров</h3>
-                    <canvas id="viewChangeChart"></canvas>
+                <div class="row">
+                    <div class="col-md-6">
+                        <canvas id="consensusTimeChart" height="200"></canvas>
+                    </div>
+                    <div class="col-md-6">
+                        <canvas id="viewChangeSuccessChart" height="200"></canvas>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
         // График времени консенсуса
-        const consensusCtx = document.getElementById('consensusTimeChart').getContext('2d');
-        new Chart(consensusCtx, {
+        const consensusTimeCtx = document.getElementById('consensusTimeChart').getContext('2d');
+        new Chart(consensusTimeCtx, {
             type: 'line',
             data: {
-                labels: Array.from({length: {{ network_stats.consensus_times|length }}, (_, i) => i + 1),
+                labels: Array.from({length: {{ network_stats.consensus_times|length }}}, (_, i) => i + 1),
                 datasets: [{
-                    label: 'Время (сек)',
+                    label: 'Время консенсуса (сек)',
                     data: {{ network_stats.consensus_times|tojson }},
-                    borderColor: '#4361ee',
+                    borderColor: 'rgba(67, 97, 238, 1)',
                     backgroundColor: 'rgba(67, 97, 238, 0.1)',
                     tension: 0.3,
                     fill: true
@@ -414,60 +477,84 @@
             options: {
                 responsive: true,
                 plugins: {
-                    legend: { display: false }
+                    legend: {
+                        display: false
+                    },
+                    title: {
+                        display: true,
+                        text: 'Время консенсуса',
+                        font: {
+                            size: 14
+                        }
+                    }
                 },
                 scales: {
                     y: {
                         beginAtZero: true,
-                        title: { display: true, text: 'Секунды' }
+                        title: {
+                            display: true,
+                            text: 'Секунды'
+                        }
                     },
                     x: {
-                        title: { display: true, text: 'Последние блоки' }
+                        title: {
+                            display: true,
+                            text: 'Последние блоки'
+                        }
                     }
                 }
             }
         });
 
-        // График смены лидеров
-        const viewChangeCtx = document.getElementById('viewChangeChart').getContext('2d');
-        new Chart(viewChangeCtx, {
+        // График успешности смены вида
+        const viewChangeSuccessCtx = document.getElementById('viewChangeSuccessChart').getContext('2d');
+        new Chart(viewChangeSuccessCtx, {
             type: 'bar',
             data: {
-                labels: Array.from({length: {{ network_stats.view_change_success|length }}, (_, i) => `Попытка ${i+1}`),
+                labels: Array.from({length: {{ network_stats.view_change_success|length }}}, (_, i) => i + 1),
                 datasets: [{
-                    label: 'Успешность',
-                    data: {{ network_stats.view_change_success|tojson }},
-                    backgroundColor: {{ network_stats.view_change_success|tojson }}.map(s => s ? '#4cc9f0' : '#f72585'),
-                    borderColor: {{ network_stats.view_change_success|tojson }}.map(s => s ? '#4cc9f0' : '#f72585'),
-                    borderWidth: 1
+                    label: 'Успешность смены вида',
+                    data: {{ network_stats.view_change_success|tojson }}.map(x => x ? 1 : 0),
+                    backgroundColor: {{ network_stats.view_change_success|tojson }}.map(x => x ? 'rgba(72, 149, 239, 0.7)' : 'rgba(247, 37, 133, 0.7)')
                 }]
             },
             options: {
                 responsive: true,
                 plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        callbacks: {
-                            label: function(context) {
-                                return context.raw ? 'Успешно' : 'Неудача';
-                            }
+                    legend: {
+                        display: false
+                    },
+                    title: {
+                        display: true,
+                        text: 'Успешность смены вида',
+                        font: {
+                            size: 14
                         }
                     }
                 },
                 scales: {
                     y: {
-                        ticks: {
-                            callback: function(value) {
-                                return value ? 'Успех' : 'Неудача';
-                            }
+                        beginAtZero: true,
+                        max: 1,
+                        title: {
+                            display: true,
+                            text: 'Успех (1=Да, 0=Нет)'
+                        }
+                    },
+                    x: {
+                        title: {
+                            display: true,
+                            text: 'Последние попытки'
                         }
                     }
                 }
             }
         });
 
-        // Автообновление каждые 30 секунд
-        setTimeout(() => location.reload(), 30000);
+        // Автообновление статуса каждые 30 секунд
+        setTimeout(() => {
+            window.location.reload();
+        }, 30000);
     </script>
 </body>
 </html>
