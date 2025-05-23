@@ -2420,10 +2420,6 @@ async def nodes_status():
     ]
     network_stats = node.get_network_stats()
     return render_template('nodes_status.html', nodes=nodes_info, network_stats=network_stats)
-Преимущества:
-
-Проверка статуса узла 0 через HTTP.
-Полная информация о статусе (включая view_number, is_leader).
 
 @app.route('/get_block_details/<int:block_index>')
 def get_block_details(block_index):
