@@ -329,7 +329,7 @@ class Node:
         # Если достигнут кворум, применяем изменения
         if confirmations >= required_confirmations:
             self.view_number = new_view_number
-            self.is_leader = (self.node_id == new_view_number % (len(self.nodes) + 1)
+            self.is_leader = (self.node_id == new_view_number % (len(self.nodes) + 1))
             node_logger.info(f"Node {self.node_id}: View changed to {new_view_number}, is_leader={self.is_leader}")
         else:
             node_logger.warning(f"Node {self.node_id}: View change failed (confirmations: {confirmations}/{required_confirmations})")
