@@ -289,56 +289,51 @@ class Node:
             await self.initiate_view_change()
 
     async def initiate_view_change(self):
+        """Инициирует смену вида, рассылая запросы другим узлам"""
         if self.view_change_in_progress:
-            node_logger.debug(f"Узел {self.node_id}: смена лидера уже выполняется")
+            node_logger.debug(f"Node {self.node_id}: View change already in progress")
             return
+    
         self.view_change_in_progress = True
-        node_logger.info(f"Узел {self.node_id} инициирует смену лидера для view {self.view_number + 1}")
-        
+        new_view_number = self.view_number + 1
         last_block = self.get_last_block() if self.chain else None
-        chain_data = {
-            'view_number': self.view_number + 1,
+    
+        # Подготовка данных для запроса
+        request_data = {
+            'view_number': new_view_number,
             'node_id': self.node_id,
             'last_block_index': last_block.index if last_block else -1,
             'last_block_hash': last_block.hash if last_block else "0"
         }
-        
+    
+        # Рассылаем запросы на смену вида другим узлам
+        confirmations = 1  # Текущий узел автоматически подтверждает
+        required_confirmations = (len(self.nodes) // 3 * 2) + 1  # Кворум (2f + 1)
+    
         tasks = []
         for node_id, domain in self.nodes.items():
             if node_id != self.node_id:
                 url = f"https://{domain}/request_view_change"
-                tasks.append(self.send_post_request(node_id, url, chain_data))
-        
+                tasks.append(self.send_post_request(node_id, url, request_data))
+    
         responses = await asyncio.gather(*tasks, return_exceptions=True)
-        confirmations = 1  # Считаем текущий узел
-        total_nodes = len(self.nodes) + 1
-        required_confirmations = (total_nodes - 1) // 3 * 2 + 1
         
         for node_id, response in responses:
             if isinstance(response, Exception):
-                node_logger.error(f"Node {node_id} failed to confirm view change: {response}")
+                node_logger.error(f"Node {node_id} failed to respond: {response}")
                 continue
             status, body = response
             if status == 200 and body.get('status') == 'View change accepted':
                 confirmations += 1
-                node_logger.info(f"Node {node_id} confirmed view change to view {self.view_number + 1}")
-            else:
-                node_logger.warning(f"Node {node_id} rejected view change: status={status}, body={body}")
-        
-        success = confirmations >= required_confirmations
-        self.view_change_success.append(success)
-        if len(self.view_change_success) > 100:
-            self.view_change_success.pop(0)
-        
-        if success:
-            self.view_number += 1
-            self.is_leader = (self.node_id == self.view_number % total_nodes)
-            node_logger.info(f"Node {self.node_id} view changed to {self.view_number}, is_leader={self.is_leader}")
-            if not self.is_leader:
-                self.start_leader_timeout()
+    
+        # Если достигнут кворум, применяем изменения
+        if confirmations >= required_confirmations:
+            self.view_number = new_view_number
+            self.is_leader = (self.node_id == new_view_number % (len(self.nodes) + 1)
+            node_logger.info(f"Node {self.node_id}: View changed to {new_view_number}, is_leader={self.is_leader}")
         else:
-            node_logger.warning(f"View change to view {self.view_number + 1} failed: {confirmations}/{required_confirmations}")
-        
+            node_logger.warning(f"Node {self.node_id}: View change failed (confirmations: {confirmations}/{required_confirmations})")
+    
         self.view_change_in_progress = False
 
     def shutdown(self):
@@ -2656,70 +2651,50 @@ async def start_sync(node):
 @app.route('/request_view_change', methods=['POST'])
 @csrf.exempt
 async def request_view_change():
-    """Обрабатывает запрос на смену вида"""
-    data = request.get_json()
-    if not data or 'view_number' not in data or 'node_id' not in data:
-        current_app.logger.error("Invalid view change request format")
-        return jsonify({'success': False, 'message': 'Invalid view change request format'}), 400
+    """Обрабатывает запрос на смену вида (view change)"""
+    try:
+        data = request.get_json()
+        if not data or 'view_number' not in data or 'node_id' not in data:
+            current_app.logger.error("Invalid view change request format")
+            return jsonify({'success': False, 'message': 'Invalid request format'}), 400
 
-    node = nodes.get(NODE_ID)
-    if not node:
-        current_app.logger.error(f"Node {NODE_ID} not found")
-        return jsonify({'success': False, 'message': 'Node not found'}), 404
+        node = nodes.get(NODE_ID)
+        if not node:
+            current_app.logger.error(f"Node {NODE_ID} not found")
+            return jsonify({'success': False, 'message': 'Node not found'}), 404
 
-    if node.view_change_in_progress:
-        current_app.logger.debug(f"Node {NODE_ID} already processing view change")
-        return jsonify({'status': 'View change already in progress'}), 200
+        proposed_view = data['view_number']
+        if proposed_view <= node.view_number:
+            current_app.logger.warning(f"Rejected view change: proposed {proposed_view} <= current {node.view_number}")
+            return jsonify({'success': False, 'message': 'Proposed view number is too low'}), 400
 
-    node.view_change_in_progress = True
-    new_view_number = data['view_number']
-    sender_id = data['node_id']
+        # Проверяем целостность цепочки, если данные предоставлены
+        if 'last_block_index' in data and 'last_block_hash' in data:
+            last_block = node.get_last_block()
+            if last_block and (data['last_block_index'] != last_block.index or 
+                              data['last_block_hash'] != last_block.hash):
+                current_app.logger.warning("Chain mismatch detected during view change")
+                return jsonify({'success': False, 'message': 'Chain mismatch'}), 400
 
-    if new_view_number <= node.view_number:
-        current_app.logger.warning(f"Node {NODE_ID} rejected view change: proposed view {new_view_number} <= current view {node.view_number}")
-        node.view_change_in_progress = False
-        return jsonify({'success': False, 'message': 'Proposed view number is too low'}), 400
+        # Обновляем view_number и статус лидера
+        node.view_number = proposed_view
+        total_nodes = len(node.nodes) + 1
+        node.is_leader = (node.node_id == proposed_view % total_nodes)
 
-    # Проверяем доступность других узлов и собираем подтверждения
-    tasks = []
-    for node_id, domain in node.nodes.items():
-        if node_id != NODE_ID and node_id != sender_id:
-            url = f"https://{domain}/receive_view_change"
-            payload = {
-                'view_number': new_view_number,
-                'node_id': NODE_ID,
-                'last_block_index': data['last_block_index'],
-                'last_block_hash': data['last_block_hash']
-            }
-            tasks.append(node.send_post_request(node_id, url, payload))
-
-    responses = await asyncio.gather(*tasks, return_exceptions=True)
-    confirmations = 1  # Считаем текущий узел
-    total_nodes = len(node.nodes) + 1
-    required_confirmations = (total_nodes - 1) // 3 * 2 + 1
-
-    for node_id, response in responses:
-        if isinstance(response, Exception):
-            current_app.logger.error(f"Node {node_id} failed to confirm view change: {response}")
-            continue
-        status, body = response
-        if status == 200 and body.get('status') == 'View change confirmed':
-            confirmations += 1
-            current_app.logger.info(f"Node {node_id} confirmed view change to view {new_view_number}")
-
-    if confirmations >= required_confirmations:
-        node.view_number = new_view_number
-        node.is_leader = (node.node_id == new_view_number % total_nodes)
-        current_app.logger.info(f"Node {NODE_ID} view changed to {new_view_number}, is_leader={node.is_leader}")
-        node.view_change_in_progress = False
-        # Сбрасываем таймер для проверки лидера
+        current_app.logger.info(f"View changed to {proposed_view}, is_leader={node.is_leader}")
+        
         if not node.is_leader:
             node.start_leader_timeout()
-        return jsonify({'status': 'View change accepted'}), 200
-    else:
-        current_app.logger.warning(f"View change to view {new_view_number} failed: {confirmations}/{required_confirmations}")
-        node.view_change_in_progress = False
-        return jsonify({'success': False, 'message': 'View change not confirmed'}), 400
+
+        return jsonify({
+            'status': 'View change accepted',
+            'view_number': node.view_number,
+            'is_leader': node.is_leader
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Error processing view change: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 # Новый маршрут для подтверждения смены вида
 @app.route('/receive_view_change', methods=['POST'])
