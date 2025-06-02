@@ -1552,6 +1552,11 @@ def inventory_report():
                         'last_update': stock.Дата_обновления.strftime('%d.%m.%Y')
                     })
 
+        # Преобразуем timestamp в datetime если это строка
+        for trans in latest_transactions:
+            if isinstance(trans.ПриходРасход.Timestamp, str):
+                trans.ПриходРасход.Timestamp = datetime.fromisoformat(trans.ПриходРасход.Timestamp.replace('Z', '+00:00'))
+        
         current_time = datetime.now(timezone.utc)
         
         return render_template(
