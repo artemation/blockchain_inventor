@@ -1552,13 +1552,16 @@ def inventory_report():
                         'last_update': stock.Дата_обновления.strftime('%d.%m.%Y')
                     })
 
+        current_time = datetime.now(timezone.utc)
+        
         return render_template(
             'inventory_report.html',
             inventory_data=inventory_data,
             total_by_product=total_by_product,
             total_by_warehouse=total_by_warehouse,
             latest_transactions=latest_transactions,
-            zero_inventory=zero_inventory
+            zero_inventory=zero_inventory,
+            current_time=current_time  # Добавляем текущее время
         )
 
     except Exception as e:
