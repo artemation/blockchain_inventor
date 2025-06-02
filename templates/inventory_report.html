@@ -19,14 +19,79 @@
         }
 
         body {
+            margin: 0;
+            padding: 0;
             background-color: #f5f7fa;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            min-height: 100vh;
             color: #333;
             line-height: 1.6;
-            padding: 20px;
         }
 
-        .report-header {
+        .sidebar {
+            width: var(--sidebar-width);
+            background: linear-gradient(312deg, var(--dark-color), #2a2ab1);
+            padding: 20px 15px;
+            position: fixed;
+            height: 100%;
+            overflow-y: auto;
+            box-shadow: 2px 0 15px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s;
+            z-index: 1000;
+        }
+
+        .sidebar .logo-container {
+            text-align: center;
+            padding: 15px 0;
+            margin-bottom: 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .sidebar .logo {
+            width: 80%;
+            max-width: 180px;
+            height: auto;
+        }
+
+        .sidebar .nav-link {
+            color: rgba(255, 255, 255, 0.8);
+            font-weight: 500;
+            margin-bottom: 8px;
+            padding: 12px 15px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            transition: all 0.3s;
+        }
+
+        .sidebar .nav-link i {
+            margin-right: 10px;
+            font-size: 1.1rem;
+            width: 24px;
+            text-align: center;
+        }
+
+        .sidebar .nav-link:hover {
+            color: white;
+            background: rgba(255, 255, 255, 0.1);
+            transform: translateX(5px);
+        }
+
+        .sidebar .nav-link.active {
+            background: var(--primary-color);
+            color: white;
+            box-shadow: 0 4px 12px rgba(67, 97, 238, 0.3);
+        }
+
+        .main-content {
+            margin-left: var(--sidebar-width);
+            padding: 30px;
+            width: calc(100% - var(--sidebar-width));
+            transition: all 0.3s;
+        }
+
+        .page-header {
             background: white;
             padding: 25px 30px;
             border-radius: 10px;
@@ -42,14 +107,6 @@
             font-weight: 700;
             margin: 0;
             font-size: 1.8rem;
-        }
-
-        .section-title {
-            color: var(--secondary-color);
-            border-bottom: 2px solid var(--accent-color);
-            padding-bottom: 10px;
-            margin-bottom: 20px;
-            font-weight: 600;
         }
 
         .card {
@@ -172,17 +229,85 @@
             font-size: 0.9rem;
             color: #6c757d;
         }
+
+        @media (max-width: 992px) {
+            .sidebar {
+                width: 80px;
+                overflow: hidden;
+            }
+
+            .sidebar .logo-container {
+                padding: 15px 5px;
+            }
+
+            .sidebar .logo {
+                width: 40px;
+            }
+
+            .sidebar .nav-link span {
+                display: none;
+            }
+
+            .sidebar .nav-link i {
+                margin-right: 0;
+                font-size: 1.3rem;
+            }
+
+            .main-content {
+                margin-left: 80px;
+                width: calc(100% - 80px);
+            }
+        }
     </style>
 </head>
 <body>
-    <div class="container-fluid">
-        <div class="report-header">
-            <div>
-                <h1 class="page-title">
-                    <i class="fas fa-boxes mr-2"></i>Отчет по запасам
-                </h1>
-                <p class="mb-0">Текущее состояние товарных запасов на складах</p>
+    <div class="sidebar">
+        <div class="logo-container">
+            <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Логотип" class="logo">
+        </div>
+        <nav class="navbar navbar-expand-lg navbar-dark">
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav flex-column">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('index') }}">
+                            <i class="fas fa-home"></i>
+                            <span>Главная</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('view_blockchain') }}">
+                            <i class="fas fa-link"></i>
+                            <span>Блокчейн</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('nodes_status') }}">
+                            <i class="fas fa-server"></i>
+                            <span>Статус узлов</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('admin_panel') }}">
+                            <i class="fas fa-cog"></i>
+                            <span>Администрирование</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link active" href="{{ url_for('inventory_report') }}">
+                            <i class="fas fa-boxes"></i>
+                            <span>Отчет по запасам</span>
+                        </a>
+                    </li>
+                </ul>
             </div>
+        </nav>
+    </div>
+
+    <div class="main-content">
+        <div class="page-header">
+            <h1 class="page-title">
+                <i class="fas fa-boxes mr-2"></i>Отчет по запасам
+            </h1>
             <div>
                 <a href="{{ url_for('index') }}" class="btn btn-back">
                     <i class="fas fa-arrow-left mr-2"></i>На главную
@@ -212,15 +337,12 @@
         </div>
 
         <div class="row">
-            <!-- Левая колонка -->
             <div class="col-md-6">
                 <div class="card">
                     <div class="card-header">
                         <i class="fas fa-warehouse mr-2"></i>Запасы по складам
                     </div>
                     <div class="card-body">
-                        <h4 class="section-title">Текущие запасы</h4>
-                        
                         <div class="table-responsive">
                             <table class="table table-hover">
                                 <thead>
@@ -252,8 +374,6 @@
                         <i class="fas fa-chart-pie mr-2"></i>Суммарные запасы по товарам
                     </div>
                     <div class="card-body">
-                        <h4 class="section-title">Итоги по товарам</h4>
-                        
                         <div class="table-responsive">
                             <table class="table table-hover">
                                 <thead>
@@ -278,15 +398,12 @@
                 </div>
             </div>
 
-            <!-- Правая колонка -->
             <div class="col-md-6">
                 <div class="card">
                     <div class="card-header">
                         <i class="fas fa-exchange-alt mr-2"></i>Последние транзакции
                     </div>
                     <div class="card-body">
-                        <h4 class="section-title">История движения</h4>
-                        
                         <div class="table-responsive">
                             <table class="table table-hover">
                                 <thead>
@@ -302,7 +419,13 @@
                                 <tbody>
                                     {% for transaction in latest_transactions %}
                                         <tr>
-                                            <td>{{ transaction.ПриходРасход.Timestamp.strftime('%d.%m.%Y %H:%M') }}</td>
+                                            <td>
+                                                {% if transaction.ПриходРасход.Timestamp %}
+                                                    {{ transaction.ПриходРасход.Timestamp|datetimeformat('%d.%m.%Y %H:%M') }}
+                                                {% else %}
+                                                    Нет данных
+                                                {% endif %}
+                                            </td>
                                             <td>{{ transaction.document_type }}</td>
                                             <td>{{ transaction.product_name }}</td>
                                             <td>{{ transaction.ПриходРасход.Количество }}</td>
@@ -321,8 +444,6 @@
                         <i class="fas fa-exclamation-triangle mr-2"></i>Нулевые запасы
                     </div>
                     <div class="card-body">
-                        <h4 class="section-title">Требуют пополнения</h4>
-                        
                         {% if zero_inventory %}
                             <div class="table-responsive">
                                 <table class="table table-hover">
@@ -365,7 +486,7 @@
             <div class="col-12">
                 <div class="alert alert-info">
                     <i class="fas fa-info-circle mr-2"></i>
-                    Отчет сформирован: {{ current_time.strftime('%d.%m.%Y %H:%M') }} | 
+                    Отчет сформирован: {{ current_time|datetimeformat('%d.%m.%Y %H:%M') }} | 
                     Всего позиций: {{ inventory_data|length }} | 
                     Уникальных товаров: {{ total_by_product|length }} | 
                     Складов с запасами: {{ total_by_warehouse|length }}
