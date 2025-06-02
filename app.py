@@ -1502,10 +1502,15 @@ def inventory_report():
 
             total_by_warehouse[склад.СкладID]['total_products'] += 1
 
+        # Добавляем алиасы для складов
+        SenderWarehouse = db.aliased(Склады)
+        ReceiverWarehouse = db.aliased(Склады)
+        
         # История движения товаров (последние 10 транзакций)
         latest_transactions = db.session.query(
-            ПриходРасход, Склады.Название.label('sender_warehouse'),
-            Склады.Название.label('receiver_warehouse'),
+            ПриходРасход,
+            SenderWarehouse.Название.label('sender_warehouse'),
+            ReceiverWarehouse.Название.label('receiver_warehouse'),
             Товары.Наименование.label('product_name'),
             Тип_документа.Тип_документа.label('document_type'),
             Единица_измерения.Единица_Измерения.label('unit')
@@ -1516,9 +1521,9 @@ def inventory_report():
         ).join(
             Единица_измерения, ПриходРасход.Единица_ИзмеренияID == Единица_измерения.Единица_ИзмеренияID
         ).join(
-            Склады, ПриходРасход.СкладОтправительID == Склады.СкладID
+            SenderWarehouse, ПриходРасход.СкладОтправительID == SenderWarehouse.СкладID  # Алиас отправителя
         ).join(
-            Склады, ПриходРасход.СкладПолучательID == Склады.СкладID
+            ReceiverWarehouse, ПриходРасход.СкладПолучательID == ReceiverWarehouse.СкладID  # Алиас получателя
         ).order_by(
             ПриходРасход.Timestamp.desc()
         ).limit(10).all()
