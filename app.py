@@ -40,6 +40,16 @@ NODE_DOMAINS = {
 }
 
 app = Flask(__name__)
+@app.template_filter('datetimeformat')
+def datetimeformat(value, format='%d.%m.%Y %H:%M'):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        try:
+            value = datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+        except ValueError:
+            return value
+    return value.strftime(format)
 csrf = CSRFProtect(app)
 CORS(app)
 
