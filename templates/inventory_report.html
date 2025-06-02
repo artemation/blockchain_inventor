@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Отчет по запасам</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        :root {
+            --primary-color: #4361ee;
+            --secondary-color: #3f37c9;
+            --accent-color: #4895ef;
+            --dark-color: #2b2d42;
+            --light-color: #f8f9fa;
+            --danger-color: #f72585;
+            --warning-color: #f8961e;
+            --sidebar-width: 280px;
+        }
+
+        body {
+            background-color: #f5f7fa;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #333;
+            line-height: 1.6;
+            padding: 20px;
+        }
+
+        .report-header {
+            background: white;
+            padding: 25px 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .page-title {
+            color: var(--dark-color);
+            font-weight: 700;
+            margin: 0;
+            font-size: 1.8rem;
+        }
+
+        .section-title {
+            color: var(--secondary-color);
+            border-bottom: 2px solid var(--accent-color);
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+
+        .card {
+            border: none;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            margin-bottom: 30px;
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+        }
+
+        .card-header {
+            background: white;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+            padding: 18px 25px;
+            border-radius: 10px 10px 0 0 !important;
+            font-weight: 600;
+            color: var(--dark-color);
+        }
+
+        .table-responsive {
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .table th {
+            background-color: var(--primary-color);
+            color: white;
+            font-weight: 600;
+        }
+
+        .table-hover tbody tr:hover {
+            background-color: rgba(67, 97, 238, 0.05);
+        }
+
+        .btn {
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-weight: 600;
+            transition: all 0.3s;
+            border: none;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+        }
+
+        .btn-primary:hover {
+            background-color: var(--secondary-color);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(67, 97, 238, 0.3);
+        }
+
+        .btn-back {
+            background-color: #6c757d;
+            color: white;
+        }
+
+        .btn-back:hover {
+            background-color: #5a6268;
+            color: white;
+        }
+
+        .status-badge {
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        .badge-success {
+            background-color: #28a745;
+            color: white;
+        }
+
+        .badge-warning {
+            background-color: #ffc107;
+            color: #212529;
+        }
+
+        .badge-danger {
+            background-color: #dc3545;
+            color: white;
+        }
+
+        .inventory-summary {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 30px;
+        }
+
+        .summary-card {
+            flex: 1;
+            margin: 0 10px;
+            padding: 20px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.05);
+            text-align: center;
+        }
+
+        .summary-card h3 {
+            font-size: 1.2rem;
+            color: var(--dark-color);
+            margin-bottom: 15px;
+        }
+
+        .summary-card .value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--primary-color);
+        }
+
+        .summary-card .label {
+            font-size: 0.9rem;
+            color: #6c757d;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="report-header">
+            <div>
+                <h1 class="page-title">
+                    <i class="fas fa-boxes mr-2"></i>Отчет по запасам
+                </h1>
+                <p class="mb-0">Текущее состояние товарных запасов на складах</p>
+            </div>
+            <div>
+                <a href="{{ url_for('index') }}" class="btn btn-back">
+                    <i class="fas fa-arrow-left mr-2"></i>На главную
+                </a>
+                <button class="btn btn-primary" onclick="window.print()">
+                    <i class="fas fa-print mr-2"></i>Печать
+                </button>
+            </div>
+        </div>
+
+        <div class="inventory-summary">
+            <div class="summary-card">
+                <h3>Всего товаров</h3>
+                <div class="value">{{ inventory_data|length }}</div>
+                <div class="label">позиций на складах</div>
+            </div>
+            <div class="summary-card">
+                <h3>Уникальных товаров</h3>
+                <div class="value">{{ total_by_product|length }}</div>
+                <div class="label">наименований</div>
+            </div>
+            <div class="summary-card">
+                <h3>Активных складов</h3>
+                <div class="value">{{ total_by_warehouse|length }}</div>
+                <div class="label">с товарными запасами</div>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- Левая колонка -->
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-warehouse mr-2"></i>Запасы по складам
+                    </div>
+                    <div class="card-body">
+                        <h4 class="section-title">Текущие запасы</h4>
+                        
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Склад</th>
+                                        <th>Товар</th>
+                                        <th>Количество</th>
+                                        <th>Ед. изм.</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for item in inventory_data %}
+                                        {% set запас, склад, товар, ед_измерения = item %}
+                                        <tr>
+                                            <td>{{ склад.Название }}</td>
+                                            <td>{{ товар.Наименование }}</td>
+                                            <td>{{ запас.Количество }}</td>
+                                            <td>{{ ед_измерения.Единица_Измерения }}</td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-chart-pie mr-2"></i>Суммарные запасы по товарам
+                    </div>
+                    <div class="card-body">
+                        <h4 class="section-title">Итоги по товарам</h4>
+                        
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Товар</th>
+                                        <th>Общее количество</th>
+                                        <th>Ед. изм.</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for product_id, product in total_by_product.items() %}
+                                        <tr>
+                                            <td>{{ product['product_name'] }}</td>
+                                            <td>{{ product['total_quantity'] }}</td>
+                                            <td>{{ product['unit'] }}</td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Правая колонка -->
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-exchange-alt mr-2"></i>Последние транзакции
+                    </div>
+                    <div class="card-body">
+                        <h4 class="section-title">История движения</h4>
+                        
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Дата</th>
+                                        <th>Тип</th>
+                                        <th>Товар</th>
+                                        <th>Количество</th>
+                                        <th>Откуда</th>
+                                        <th>Куда</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for transaction in latest_transactions %}
+                                        <tr>
+                                            <td>{{ transaction.ПриходРасход.Timestamp.strftime('%d.%m.%Y %H:%M') }}</td>
+                                            <td>{{ transaction.document_type }}</td>
+                                            <td>{{ transaction.product_name }}</td>
+                                            <td>{{ transaction.ПриходРасход.Количество }}</td>
+                                            <td>{{ transaction.sender_warehouse }}</td>
+                                            <td>{{ transaction.receiver_warehouse }}</td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-exclamation-triangle mr-2"></i>Нулевые запасы
+                    </div>
+                    <div class="card-body">
+                        <h4 class="section-title">Требуют пополнения</h4>
+                        
+                        {% if zero_inventory %}
+                            <div class="table-responsive">
+                                <table class="table table-hover">
+                                    <thead>
+                                        <tr>
+                                            <th>Склад</th>
+                                            <th>Товар</th>
+                                            <th>Статус</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for item in zero_inventory %}
+                                            <tr>
+                                                <td>{{ item['warehouse_name'] }}</td>
+                                                <td>{{ item['product_name'] }}</td>
+                                                <td>
+                                                    {% if 'last_update' in item %}
+                                                        <span class="status-badge badge-warning">Нулевой остаток</span>
+                                                    {% else %}
+                                                        <span class="status-badge badge-danger">Отсутствует</span>
+                                                    {% endif %}
+                                                </td>
+                                            </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        {% else %}
+                            <div class="alert alert-success">
+                                <i class="fas fa-check-circle mr-2"></i>
+                                Все склады имеют запасы товаров. Нулевых позиций не обнаружено.
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mt-4">
+            <div class="col-12">
+                <div class="alert alert-info">
+                    <i class="fas fa-info-circle mr-2"></i>
+                    Отчет сформирован: {{ current_time.strftime('%d.%m.%Y %H:%M') }} | 
+                    Всего позиций: {{ inventory_data|length }} | 
+                    Уникальных товаров: {{ total_by_product|length }} | 
+                    Складов с запасами: {{ total_by_warehouse|length }}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
