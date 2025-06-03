@@ -195,8 +195,19 @@ class Block:
         self.previous_hash = previous_hash
         self.hash = self.calculate_hash()
 
+    def calculate_hash(self):
+        """Вычисляет хеш текущего блока"""
+        block_string = json.dumps({
+            'index': self.index,
+            'timestamp': self.timestamp.isoformat() if hasattr(self.timestamp, 'isoformat') else str(self.timestamp),
+            'transactions': self.transactions,
+            'previous_hash': self.previous_hash
+        }, sort_keys=True).encode('utf-8')
+        return hashlib.sha256(block_string).hexdigest()
+
     @staticmethod
-    def calculate_hash(block_data):
+    def calculate_hash_from_data(block_data):
+        """Статический метод для вычисления хеша из данных блока"""
         data = {
             'index': block_data['index'],
             'timestamp': block_data['timestamp'],
