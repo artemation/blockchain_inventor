@@ -274,9 +274,11 @@ class Node:
         self.view_change_success = []  # Список результатов смены вида (True/False)
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
-        self.loop.run_until_complete(self.sync_genesis_block())
-        self.loop.run_until_complete(self.sync_view_number())
-        self.loop.run_until_complete(self.sync_blockchain())
+        
+        with app.app_context():  # Добавлено
+            self.loop.run_until_complete(self.sync_genesis_block())
+            self.loop.run_until_complete(self.sync_view_number())
+            self.loop.run_until_complete(self.sync_blockchain())
         self.start_leader_timeout()
 
     def start_leader_timeout(self):
@@ -837,8 +839,9 @@ class Node:
 
     # В начале работы узла
     async def sync_blockchain(self):
+        """Синхронизирует блокчейн с другими узлами"""
         try:
-            with current_app.app_context():
+            with app.app_context():  # Добавьте контекст вручную
                 local_height = db.session.query(func.max(BlockchainBlock.index)) \
                                        .filter_by(node_id=self.node_id) \
                                        .scalar() or -1
@@ -960,7 +963,7 @@ class Node:
                 current_app.logger.info(f"No longer valid chain found, current height {local_height}")
     
         except Exception as e:
-            current_app.logger.error(f"Critical error in blockchain sync: {str(e)}", exc_info=True)
+            app.logger.error(f"Critical error in blockchain sync: {str(e)}", exc_info=True)
     
     async def request_block_from_node(self, node_id, block_index):
         """Запросить блок с определенным индексом у узла"""
