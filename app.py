@@ -193,10 +193,10 @@ class Block:
         self.timestamp = timestamp
         self.transactions = transactions
         self.previous_hash = previous_hash
-        self.hash = self.calculate_hash()
+        self.hash = self._calculate_instance_hash()  # Метод экземпляра
 
-    def calculate_hash(self):
-        """Вычисляет хеш текущего блока"""
+    def _calculate_instance_hash(self):
+        """Вычисляет хеш для текущего экземпляра блока"""
         block_string = json.dumps({
             'index': self.index,
             'timestamp': self.timestamp.isoformat() if hasattr(self.timestamp, 'isoformat') else str(self.timestamp),
@@ -206,15 +206,20 @@ class Block:
         return hashlib.sha256(block_string).hexdigest()
 
     @staticmethod
-    def calculate_hash_from_data(block_data):
-        """Статический метод для вычисления хеша из данных блока"""
-        data = {
+    def calculate_hash(block_data):
+        """Статический метод для вычисления хеша из данных блока (dict)"""
+        if isinstance(block_data, Block):
+            return block_data._calculate_instance_hash()
+            
+        if not isinstance(block_data, dict):
+            raise ValueError("Block data must be a dictionary or Block instance")
+            
+        return hashlib.sha256(json.dumps({
             'index': block_data['index'],
             'timestamp': block_data['timestamp'],
             'transactions': block_data['transactions'],
             'previous_hash': block_data['previous_hash']
-        }
-        return hashlib.sha256(json.dumps(data, sort_keys=True).encode('utf-8')).hexdigest()
+        }, sort_keys=True).encode('utf-8')).hexdigest()
 
     def to_dict(self):
         return {
@@ -431,7 +436,7 @@ class Node:
             request_data['user_id'] = sender_id
             request_data['view_number'] = self.view_number
             request_string = json.dumps(request_data, sort_keys=True)
-            request_digest = self.generate_digest(request_string.encode('utf-8'))
+            request_digest = hashlib.sha256(request_string.encode('utf-8')).hexdigest()
     
             self.requests[sequence_number] = request_string
             current_app.logger.debug(f"Создан запрос с номером последовательности {sequence_number}")
@@ -1433,32 +1438,43 @@ async def check_node_availability(self, node_id):
 @app.route('/receive_block', methods=['POST'])
 @csrf.exempt
 async def receive_block():
-    """Обрабатывает получение нового блока от других узлов сети"""
+    """Обрабатывает получение новых блоков с проверкой целостности"""
     try:
-        # 1. Парсинг и валидация входящих данных
+        # 1. Парсинг и базовая валидация входящих данных
         data = request.get_json()
         if not data or 'sender_id' not in data or 'block' not in data:
-            app.logger.error("Invalid block data: missing required fields")
-            return jsonify({'error': 'Invalid request: missing sender_id or block data'}), 400
+            app.logger.error("Invalid request: missing required fields")
+            return jsonify({'error': 'Missing sender_id or block data'}), 400
 
         sender_id = data['sender_id']
         block_data = data['block']
         
-        # 2. Проверка формата данных блока
+        # 2. Проверка структуры блока
         required_fields = ['index', 'timestamp', 'transactions', 'previous_hash', 'hash']
         if not all(field in block_data for field in required_fields):
-            app.logger.error(f"Invalid block format: missing fields in {block_data}")
+            app.logger.error(f"Invalid block structure: {block_data.keys()}")
             return jsonify({'error': 'Invalid block format'}), 400
 
-        # 3. Получаем текущий узел
-        current_node = nodes.get(NODE_ID)
-        if not current_node:
-            app.logger.error(f"Current node {NODE_ID} not found")
-            return jsonify({'error': 'Node not initialized'}), 500
+        # 3. Проверка хеша блока
+        try:
+            # Используем статический метод для словаря
+            calculated_hash = hashlib.sha256(json.dumps({
+                'index': block_data['index'],
+                'timestamp': block_data['timestamp'],
+                'transactions': block_data['transactions'],
+                'previous_hash': block_data['previous_hash']
+            }, sort_keys=True).encode('utf-8')).hexdigest()
+            
+            if calculated_hash != block_data['hash']:
+                app.logger.error(f"Hash mismatch: {calculated_hash} vs {block_data['hash']}")
+                return jsonify({'error': 'Block hash verification failed'}), 400
+        except Exception as e:
+            app.logger.error(f"Hash calculation error: {str(e)}")
+            return jsonify({'error': 'Block processing error'}), 400
 
-        # 4. Проверяем, существует ли блок уже в нашей базе
+        # 4. Проверка существования блока
         with app.app_context():
-            existing_block = db.session.query(BlockchainBlock).filter_by(
+            existing_block = BlockchainBlock.query.filter_by(
                 hash=block_data['hash'],
                 node_id=NODE_ID
             ).first()
@@ -1467,95 +1483,40 @@ async def receive_block():
                 app.logger.info(f"Block #{block_data['index']} already exists")
                 return jsonify({'status': 'Block already exists'}), 200
 
-            # 5. Проверяем целостность блока
+            # 5. Для не-генезис блоков проверяем предыдущий блок
+            if block_data['index'] > 0:
+                prev_block = BlockchainBlock.query.filter_by(
+                    index=block_data['index']-1,
+                    node_id=NODE_ID
+                ).order_by(BlockchainBlock.timestamp.desc()).first()
+
+                if not prev_block:
+                    app.logger.warning(f"Missing previous block #{block_data['index']-1}")
+                    return jsonify({
+                        'status': 'Missing previous block',
+                        'missing_index': block_data['index']-1
+                    }), 400
+
+                if block_data['previous_hash'] != prev_block.hash:
+                    app.logger.error(f"Previous hash mismatch: {block_data['previous_hash']} vs {prev_block.hash}")
+                    return jsonify({'error': 'Block chain integrity broken'}), 400
+
+            # 6. Создаем и сохраняем новый блок
             try:
-                # 5.1. Проверяем хеш блока
-                calculated_hash = Block.calculate_hash(block_data)
-                if calculated_hash != block_data['hash']:
-                    app.logger.error(f"Hash mismatch for block #{block_data['index']}: "
-                                   f"calculated {calculated_hash}, received {block_data['hash']}")
-                    return jsonify({'error': 'Block hash mismatch'}), 400
-
-                # 5.2. Для не-генезис блоков проверяем предыдущий блок
-                if block_data['index'] > 0:
-                    prev_block = db.session.query(BlockchainBlock).filter_by(
-                        index=block_data['index'] - 1,
-                        node_id=NODE_ID
-                    ).order_by(BlockchainBlock.timestamp.desc()).first()
-
-                    if not prev_block:
-                        # Если предыдущего блока нет - запрашиваем его
-                        app.logger.warning(f"Previous block #{block_data['index']-1} not found, requesting...")
-                        await current_node.request_missing_blocks(sender_id, block_data['index'] - 1)
-                        return jsonify({'status': 'Requested missing blocks'}), 202
-
-                    if block_data['previous_hash'] != prev_block.hash:
-                        app.logger.error(f"Previous hash mismatch for block #{block_data['index']}: "
-                                       f"expected {prev_block.hash}, got {block_data['previous_hash']}")
-                        return jsonify({'error': 'Previous hash mismatch'}), 400
-
-                # 6. Создаем объект блока
-                try:
-                    block = Block(
-                        index=block_data['index'],
-                        timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
-                        transactions=block_data['transactions'],
-                        previous_hash=block_data['previous_hash']
-                    )
-                    block.hash = block_data['hash']  # Используем полученный хеш
-                except Exception as e:
-                    app.logger.error(f"Failed to create block object: {str(e)}")
-                    return jsonify({'error': 'Invalid block data'}), 400
-
-                # 7. Сохраняем блок в базу данных
-                block_db = BlockchainBlock(
-                    index=block.index,
-                    timestamp=block.timestamp,
-                    transactions=json.dumps(block.transactions, ensure_ascii=False),
-                    previous_hash=block.previous_hash,
-                    hash=block.hash,
+                new_block = BlockchainBlock(
+                    index=block_data['index'],
+                    timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
+                    transactions=json.dumps(block_data['transactions'], ensure_ascii=False),
+                    previous_hash=block_data['previous_hash'],
+                    hash=block_data['hash'],
                     node_id=NODE_ID,
                     confirming_node_id=sender_id,
-                    confirmed=False  # Ждем подтверждения консенсуса
+                    confirmed=False
                 )
 
-                db.session.add(block_db)
-
-                # 8. Проверяем консенсус (если блок от лидера)
-                if sender_id == current_node.view_number % (len(current_node.nodes) + 1):
-                    confirmations = 1  # Учитываем текущий узел
-                    required_confirmations = (len(current_node.nodes) // 3 * 2) + 1
-
-                    # Проверяем подтверждения от других узлов
-                    for node_id, domain in current_node.nodes.items():
-                        if node_id != NODE_ID and node_id != sender_id:
-                            try:
-                                async with aiohttp.ClientSession() as session:
-                                    url = f"https://{domain}/confirm_block/{block.index}"
-                                    async with session.get(url, timeout=5) as response:
-                                        if response.status == 200:
-                                            confirmations += 1
-                            except Exception:
-                                continue
-
-                    if confirmations >= required_confirmations:
-                        block_db.confirmed = True
-                        app.logger.info(f"Block #{block.index} confirmed by {confirmations} nodes")
-                    else:
-                        app.logger.warning(f"Block #{block.index} has only {confirmations}/{required_confirmations} confirmations")
-
+                db.session.add(new_block)
                 db.session.commit()
-                app.logger.info(f"Block #{block.index} saved successfully")
-
-                # 9. Если это новый блок, распространяем его дальше
-                if block.index > current_node.get_last_block().index:
-                    for node_id, domain in current_node.nodes.items():
-                        if node_id != NODE_ID and node_id != sender_id:
-                            asyncio.create_task(current_node.send_message(
-                                node_id,
-                                'NewBlock',
-                                {'block': block_data}
-                            ))
+                app.logger.info(f"Block #{block_data['index']} saved successfully")
 
                 return jsonify({'status': 'Block accepted'}), 200
 
@@ -1565,11 +1526,14 @@ async def receive_block():
                 return jsonify({'error': 'Database error'}), 500
             except Exception as e:
                 db.session.rollback()
-                app.logger.error(f"Error processing block: {str(e)}", exc_info=True)
-                return jsonify({'error': str(e)}), 500
+                app.logger.error(f"Block processing error: {str(e)}")
+                return jsonify({'error': 'Block processing failed'}), 500
 
+    except json.JSONDecodeError:
+        app.logger.error("Invalid JSON received")
+        return jsonify({'error': 'Invalid JSON data'}), 400
     except Exception as e:
-        app.logger.error(f"Unexpected error in receive_block: {str(e)}", exc_info=True)
+        app.logger.error(f"Unexpected error: {str(e)}", exc_info=True)
         return jsonify({'error': 'Internal server error'}), 500
 
 
