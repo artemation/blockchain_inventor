@@ -276,6 +276,7 @@ class Node:
         asyncio.set_event_loop(self.loop)
         self.loop.run_until_complete(self.sync_genesis_block())
         self.loop.run_until_complete(self.sync_view_number())
+        self.loop.run_until_complete(self.sync_blockchain())
         self.start_leader_timeout()
 
     def start_leader_timeout(self):
@@ -285,6 +286,34 @@ class Node:
                     await asyncio.sleep(5)  # Проверять каждые 5 секунд
             self.loop.create_task(periodic_check())
 
+    async def request_missing_blocks(self, from_node_id, start_index):
+        """Запрашивает отсутствующие блоки у указанного узла"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                for index in range(start_index, max(0, start_index - 10), -1):
+                    url = f"https://{self.nodes[from_node_id]}/get_block/{index}"
+                    async with session.get(url, timeout=5) as response:
+                        if response.status == 200:
+                            block_data = await response.json()
+                            # Добавляем блок в локальную базу
+                            with app.app_context():
+                                if not BlockchainBlock.query.filter_by(hash=block_data['hash']).first():
+                                    new_block = BlockchainBlock(
+                                        index=block_data['index'],
+                                        timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
+                                        transactions=json.dumps(block_data['transactions'], ensure_ascii=False),
+                                        previous_hash=block_data['previous_hash'],
+                                        hash=block_data['hash'],
+                                        node_id=self.node_id,
+                                        confirming_node_id=from_node_id,
+                                        confirmed=False
+                                    )
+                                    db.session.add(new_block)
+                                    db.session.commit()
+                                    app.logger.info(f"Added missing block #{index} from node {from_node_id}")
+        except Exception as e:
+            app.logger.error(f"Error requesting missing blocks: {str(e)}")
+    
     async def check_leader_activity(self):
         """
         Периодически проверяет активность лидера через запрос к /health.
@@ -768,6 +797,34 @@ class Node:
             node_logger.info(f"Node {self.node_id} updated view_number to {self.view_number}, is_leader={self.is_leader}")
             if not self.is_leader:
                 self.start_leader_timeout()
+
+    async def request_missing_blocks(self, from_node_id, start_index):
+        """Запрашивает отсутствующие блоки у указанного узла"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                for index in range(start_index, max(0, start_index - 10), -1):
+                    url = f"https://{self.nodes[from_node_id]}/get_block/{index}"
+                    async with session.get(url, timeout=5) as response:
+                        if response.status == 200:
+                            block_data = await response.json()
+                            # Добавляем блок в локальную базу
+                            with app.app_context():
+                                if not BlockchainBlock.query.filter_by(hash=block_data['hash']).first():
+                                    new_block = BlockchainBlock(
+                                        index=block_data['index'],
+                                        timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
+                                        transactions=json.dumps(block_data['transactions'], ensure_ascii=False),
+                                        previous_hash=block_data['previous_hash'],
+                                        hash=block_data['hash'],
+                                        node_id=self.node_id,
+                                        confirming_node_id=from_node_id,
+                                        confirmed=False
+                                    )
+                                    db.session.add(new_block)
+                                    db.session.commit()
+                                    app.logger.info(f"Added missing block #{index} from node {from_node_id}")
+        except Exception as e:
+            app.logger.error(f"Error requesting missing blocks: {str(e)}")
     
     async def send_get_request(self, node_id, url):
         """Отправляет GET-запрос к указанному узлу"""
@@ -780,11 +837,7 @@ class Node:
 
     # В начале работы узла
     async def sync_blockchain(self):
-        """Синхронизирует блокчейн текущего узла с другими узлами сети"""
-        current_app.logger.info(f"Node {self.node_id} starting blockchain sync")
-        
         try:
-            # 1. Получаем текущую высоту локального блокчейна
             with current_app.app_context():
                 local_height = db.session.query(func.max(BlockchainBlock.index)) \
                                        .filter_by(node_id=self.node_id) \
@@ -908,24 +961,6 @@ class Node:
     
         except Exception as e:
             current_app.logger.error(f"Critical error in blockchain sync: {str(e)}", exc_info=True)
-
-    async def request_missing_blocks(self, from_node_id, start_index):
-        """Запрашивает отсутствующие блоки у указанного узла"""
-        try:
-            async with aiohttp.ClientSession() as session:
-                for index in range(start_index, max(0, start_index - 10), -1):  # Запрашиваем до 10 предыдущих блоков
-                    url = f"https://{self.nodes[from_node_id]}/get_block/{index}"
-                    async with session.get(url, timeout=5) as response:
-                        if response.status == 200:
-                            block_data = await response.json()
-                            # Отправляем полученный блок на обработку
-                            await self.receive_message({
-                                'type': 'NewBlock',
-                                'sender_id': from_node_id,
-                                'data': block_data
-                            })
-        except Exception as e:
-            self.logger.error(f"Error requesting missing blocks: {str(e)}")
     
     async def request_block_from_node(self, node_id, block_index):
         """Запросить блок с определенным индексом у узла"""
@@ -1457,7 +1492,6 @@ async def receive_block():
 
         # 3. Проверка хеша блока
         try:
-            # Используем статический метод для словаря
             calculated_hash = hashlib.sha256(json.dumps({
                 'index': block_data['index'],
                 'timestamp': block_data['timestamp'],
@@ -1492,6 +1526,10 @@ async def receive_block():
 
                 if not prev_block:
                     app.logger.warning(f"Missing previous block #{block_data['index']-1}")
+                    # ЗАПРАШИВАЕМ НЕДОСТАЮЩИЕ БЛОКИ АСИНХРОННО
+                    node = nodes.get(NODE_ID)
+                    if node:
+                        asyncio.create_task(node.request_missing_blocks(sender_id, block_data['index']-1))
                     return jsonify({
                         'status': 'Missing previous block',
                         'missing_index': block_data['index']-1
