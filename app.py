@@ -289,6 +289,7 @@ class Node:
             self.loop.create_task(periodic_check())
 
     async def request_missing_blocks(self, from_node_id, start_index):
+        app.logger.info(f"Starting to request missing blocks from node {from_node_id} starting from index {start_index}")
         """Запрашивает отсутствующие блоки у указанного узла"""
         try:
             async with aiohttp.ClientSession() as session:
