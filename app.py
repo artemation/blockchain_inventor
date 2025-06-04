@@ -1859,7 +1859,8 @@ def view_blockchain():
                     transactions = json.loads(main_block.transactions)
                     
                     # Получаем список уникальных узлов, подтвердивших этот блок
-                    confirming_nodes = list({b.confirming_node_id for b in blocks if b.confirmed})
+                    confirming_nodes = list({b.confirming_node_id for b in blocks})
+                    consensus_reached = any(b.confirmed for b in blocks)
                     confirmations_count = len(confirming_nodes)
                     
                     # Проверяем достижение консенсуса
