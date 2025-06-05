@@ -289,18 +289,19 @@ class Node:
             self.loop.create_task(periodic_check())
 
     async def request_missing_blocks(self, from_node_id, start_index):
+        """Запрашивает недостающие блоки у другого узла"""
         app.logger.info(f"Starting to request missing blocks from node {from_node_id} starting from index {start_index}")
-        """Запрашивает отсутствующие блоки у указанного узла"""
         try:
             async with aiohttp.ClientSession() as session:
                 for index in range(start_index, max(0, start_index - 10), -1):
+                    app.logger.debug(f"Requesting block #{index} from node {from_node_id}")
                     url = f"https://{self.nodes[from_node_id]}/get_block/{index}"
                     async with session.get(url, timeout=5) as response:
+                        app.logger.debug(f"Response for block #{index}: status={response.status}")
                         if response.status == 200:
                             block_data = await response.json()
-                            # Добавляем блок в локальную базу
                             with app.app_context():
-                                if not BlockchainBlock.query.filter_by(hash=block_data['hash']).first():
+                                if not BlockchainBlock.query.filter_by(hash=block_data['hash'], node_id=self.node_id).first():
                                     new_block = BlockchainBlock(
                                         index=block_data['index'],
                                         timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
@@ -314,8 +315,10 @@ class Node:
                                     db.session.add(new_block)
                                     db.session.commit()
                                     app.logger.info(f"Added missing block #{index} from node {from_node_id}")
+                        else:
+                            app.logger.warning(f"Failed to fetch block #{index} from node {from_node_id}: status={response.status}")
         except Exception as e:
-            app.logger.error(f"Error requesting missing blocks: {str(e)}")
+            app.logger.error(f"Error requesting missing blocks from node {from_node_id}: {str(e)}", exc_info=True)
     
     async def check_leader_activity(self):
         """
@@ -1523,21 +1526,24 @@ async def receive_block():
 
             # 5. Для не-генезис блоков проверяем предыдущий блок
             if block_data['index'] > 0:
+                previous_index = block_data['index'] - 1
+                app.logger.debug(f"Checking previous block for index={previous_index}, sender_id={sender_id}")
                 prev_block = BlockchainBlock.query.filter_by(
-                    index=block_data['index']-1,
+                    index=previous_index,
                     node_id=NODE_ID
                 ).order_by(BlockchainBlock.timestamp.desc()).first()
 
                 if not prev_block:
-                    app.logger.warning(f"Missing previous block #{block_data['index']-1}")
+                    app.logger.warning(f"Missing previous block #{previous_index}")
                     # ЗАПРАШИВАЕМ НЕДОСТАЮЩИЕ БЛОКИ АСИНХРОННО
                     node = nodes.get(NODE_ID)
                     if node:
-                        app.logger.info(f"Scheduling request_missing_blocks for node {sender_id} starting from index {block_data['index']-1}")
+                        app.logger.info(f"Scheduling request_missing_blocks for node {sender_id} starting from index {previous_index}")
                         # Оборачиваем задачу в try-except для логирования ошибок
                         async def task_wrapper():
                             try:
-                                await node.request_missing_blocks(sender_id, block_data['index']-1)
+                                app.logger.debug(f"Executing request_missing_blocks for node {sender_id}, index {previous_index}")
+                                await node.request_missing_blocks(sender_id, previous_index)
                             except Exception as task_error:
                                 app.logger.error(f"Error in request_missing_blocks task: {str(task_error)}", exc_info=True)
                         asyncio.create_task(task_wrapper())
@@ -1545,7 +1551,7 @@ async def receive_block():
                         app.logger.error(f"Node {NODE_ID} not found for requesting missing blocks")
                     return jsonify({
                         'status': 'Missing previous block',
-                        'missing_index': block_data['index']-1
+                        'missing_index': previous_index
                     }), 400
 
                 if block_data['previous_hash'] != prev_block.hash:
@@ -1580,6 +1586,12 @@ async def receive_block():
                 app.logger.error(f"Block processing error: {str(e)}")
                 return jsonify({'error': 'Block processing failed'}), 500
 
+    except json.JSONDecodeError:
+        app.logger.error("Invalid JSON received")
+        return jsonify({'error': 'Invalid JSON data'}), 400
+    except Exception as e:
+        app.logger.error(f"Unexpected error: {str(e)}", exc_info=True)
+        return jsonify({'error': 'Internal server error'}), 500
     except json.JSONDecodeError:
         app.logger.error("Invalid JSON received")
         return jsonify({'error': 'Invalid JSON data'}), 400
