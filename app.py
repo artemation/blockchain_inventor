@@ -30,10 +30,6 @@ from tenacity import retry, stop_after_attempt, wait_fixed
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
-# Настройка асинхронного движка (в начале app.py)
-engine = create_async_engine(app.config['SQLALCHEMY_DATABASE_URI'])
-async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
 load_dotenv()
 # Определяем NODE_ID в начале
 NODE_ID = int(os.environ.get('NODE_ID', 0))
@@ -58,6 +54,10 @@ def datetimeformat(value, format='%d.%m.%Y %H:%M'):
     return value.strftime(format)
 csrf = CSRFProtect(app)
 CORS(app)
+
+# Настройка асинхронного движка (в начале app.py)
+engine = create_async_engine(app.config['SQLALCHEMY_DATABASE_URI'])
+async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 app.logger.setLevel(logging.DEBUG)  # Убедитесь, что уровень логирования установлен на DEBUG
 
