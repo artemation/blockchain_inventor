@@ -1533,7 +1533,16 @@ async def receive_block():
                     # ЗАПРАШИВАЕМ НЕДОСТАЮЩИЕ БЛОКИ АСИНХРОННО
                     node = nodes.get(NODE_ID)
                     if node:
-                        asyncio.create_task(node.request_missing_blocks(sender_id, block_data['index']-1))
+                        app.logger.info(f"Scheduling request_missing_blocks for node {sender_id} starting from index {block_data['index']-1}")
+                        # Оборачиваем задачу в try-except для логирования ошибок
+                        async def task_wrapper():
+                            try:
+                                await node.request_missing_blocks(sender_id, block_data['index']-1)
+                            except Exception as task_error:
+                                app.logger.error(f"Error in request_missing_blocks task: {str(task_error)}", exc_info=True)
+                        asyncio.create_task(task_wrapper())
+                    else:
+                        app.logger.error(f"Node {NODE_ID} not found for requesting missing blocks")
                     return jsonify({
                         'status': 'Missing previous block',
                         'missing_index': block_data['index']-1
