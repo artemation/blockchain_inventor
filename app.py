@@ -296,29 +296,38 @@ class Node:
                 for index in range(start_index, max(0, start_index - 10), -1):
                     app.logger.debug(f"Requesting block #{index} from node {from_node_id}")
                     url = f"https://{self.nodes[from_node_id]}/get_block/{index}"
-                    async with session.get(url, timeout=5) as response:
-                        app.logger.debug(f"Response for block #{index}: status={response.status}")
-                        if response.status == 200:
-                            block_data = await response.json()
-                            with app.app_context():
-                                if not BlockchainBlock.query.filter_by(hash=block_data['hash'], node_id=self.node_id).first():
-                                    new_block = BlockchainBlock(
-                                        index=block_data['index'],
-                                        timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
-                                        transactions=json.dumps(block_data['transactions'], ensure_ascii=False),
-                                        previous_hash=block_data['previous_hash'],
-                                        hash=block_data['hash'],
-                                        node_id=self.node_id,
-                                        confirming_node_id=from_node_id,
-                                        confirmed=False
-                                    )
-                                    db.session.add(new_block)
-                                    db.session.commit()
-                                    app.logger.info(f"Added missing block #{index} from node {from_node_id}")
-                        else:
-                            app.logger.warning(f"Failed to fetch block #{index} from node {from_node_id}: status={response.status}")
+                    try:
+                        async with session.get(url, timeout=5) as response:
+                            app.logger.debug(f"Response for block #{index}: status={response.status}")
+                            if response.status == 200:
+                                block_data = await response.json()
+                                with app.app_context():
+                                    if not BlockchainBlock.query.filter_by(hash=block_data['hash'], node_id=self.node_id).first():
+                                        new_block = BlockchainBlock(
+                                            index=block_data['index'],
+                                            timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
+                                            transactions=json.dumps(block_data['transactions'], ensure_ascii=False),
+                                            previous_hash=block_data['previous_hash'],
+                                            hash=block_data['hash'],
+                                            node_id=self.node_id,
+                                            confirming_node_id=from_node_id,
+                                            confirmed=False
+                                        )
+                                        db.session.add(new_block)
+                                        db.session.commit()
+                                        app.logger.info(f"Added missing block #{index} from node {from_node_id}")
+                                    else:
+                                        app.logger.debug(f"Block #{index} already exists")
+                            else:
+                                app.logger.warning(f"Failed to fetch block #{index} from node {from_node_id}: status={response.status}")
+                    except aiohttp.ClientError as e:
+                        app.logger.error(f"Network error fetching block #{index} from node {from_node_id}: {str(e)}")
+                        break
+                    except Exception as e:
+                        app.logger.error(f"Unexpected error fetching block #{index} from node {from_node_id}: {str(e)}", exc_info=True)
+                        break
         except Exception as e:
-            app.logger.error(f"Error requesting missing blocks from node {from_node_id}: {str(e)}", exc_info=True)
+            app.logger.error(f"Error in request_missing_blocks for node {from_node_id}, index {start_index}: {str(e)}", exc_info=True)
     
     async def check_leader_activity(self):
         """
@@ -839,6 +848,10 @@ class Node:
                 return response.status, await response.json()
     
     def get_last_block(self):
+        """Возвращает последний блок в цепочке"""
+        if not self.chain:
+            app.logger.warning(f"Chain is empty for node {self.node_id}")
+            return None
         return self.chain[-1]
 
     # В начале работы узла
@@ -2869,8 +2882,10 @@ async def request_view_change():
         # Проверяем целостность цепочки, если данные предоставлены
         if 'last_block_index' in data and 'last_block_hash' in data:
             last_block = node.get_last_block()
-            if last_block and (data['last_block_index'] != last_block.index or 
-                              data['last_block_hash'] != last_block.hash):
+            if last_block is None:
+                current_app.logger.warning(f"No blocks available for view change on node {NODE_ID}")
+                return jsonify({'success': False, 'message': 'No blocks available for chain validation'}), 400
+            if data['last_block_index'] != last_block.index or data['last_block_hash'] != last_block.hash:
                 current_app.logger.warning("Chain mismatch detected during view change")
                 return jsonify({'success': False, 'message': 'Chain mismatch'}), 400
 
@@ -2980,6 +2995,24 @@ async def handle_leader_request():
         return jsonify({'success': True, 'message': message}), 200
     else:
         return jsonify({'success': False, 'message': message}), 400
+
+@app.route('/sync_blocks/<int:from_node_id>', methods=['POST'])
+@csrf.exempt
+async def sync_blocks(from_node_id):
+    """Принудительная синхронизация блоков с указанного узла"""
+    try:
+        node = nodes.get(NODE_ID)
+        if not node:
+            app.logger.error(f"Node {NODE_ID} not found")
+            return jsonify({'error': 'Node not found'}), 404
+        last_block = BlockchainBlock.query.filter_by(node_id=NODE_ID).order_by(BlockchainBlock.index.desc()).first()
+        start_index = last_block.index + 1 if last_block else 0
+        app.logger.info(f"Starting sync from node {from_node_id} starting from index {start_index}")
+        await node.request_missing_blocks(from_node_id, start_index)
+        return jsonify({'status': 'Sync initiated'}), 200
+    except Exception as e:
+        app.logger.error(f"Error syncing blocks from node {from_node_id}: {str(e)}", exc_info=True)
+        return jsonify({'error': 'Sync failed'}), 500
 
 def cleanup():
     """Очищает ресурсы всех узлов при остановке приложения"""
