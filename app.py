@@ -55,10 +55,6 @@ def datetimeformat(value, format='%d.%m.%Y %H:%M'):
 csrf = CSRFProtect(app)
 CORS(app)
 
-# Настройка асинхронного движка (в начале app.py)
-engine = create_async_engine(app.config['SQLALCHEMY_DATABASE_URI'])
-async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
 app.logger.setLevel(logging.DEBUG)  # Убедитесь, что уровень логирования установлен на DEBUG
 
 file_handler = RotatingFileHandler('app.log', maxBytes=1024 * 1024, backupCount=5)
@@ -86,6 +82,10 @@ db.init_app(app)
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
+
+# Настройка асинхронного движка (в начале app.py)
+engine = create_async_engine(app.config['SQLALCHEMY_DATABASE_URI'])
+async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 # Функция для отключения CSRF для определенных маршрутов
 
