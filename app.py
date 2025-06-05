@@ -16,7 +16,7 @@ from sqlalchemy import text, select, func
 from flask_wtf.csrf import CSRFProtect
 import threading
 from datetime import datetime, timezone
-import psycopg2
+#import psycopg2
 import asyncio
 import aiohttp
 from uuid import uuid4
