@@ -293,7 +293,8 @@ class Node:
         app.logger.info(f"Starting to request missing blocks from node {from_node_id} starting from index {start_index}")
         try:
             async with aiohttp.ClientSession() as session:
-                for index in range(start_index, max(0, start_index - 10), -1):
+                index = start_index
+                while index >= 0:
                     app.logger.debug(f"Requesting block #{index} from node {from_node_id}")
                     url = f"https://{self.nodes[from_node_id]}/get_block/{index}"
                     try:
@@ -318,14 +319,17 @@ class Node:
                                         app.logger.info(f"Added missing block #{index} from node {from_node_id}")
                                     else:
                                         app.logger.debug(f"Block #{index} already exists")
+                                        break  # Прерываем, если блок уже есть
                             else:
                                 app.logger.warning(f"Failed to fetch block #{index} from node {from_node_id}: status={response.status}")
+                                break
                     except aiohttp.ClientError as e:
                         app.logger.error(f"Network error fetching block #{index} from node {from_node_id}: {str(e)}")
                         break
                     except Exception as e:
                         app.logger.error(f"Unexpected error fetching block #{index} from node {from_node_id}: {str(e)}", exc_info=True)
                         break
+                    index -= 1
         except Exception as e:
             app.logger.error(f"Error in request_missing_blocks for node {from_node_id}, index {start_index}: {str(e)}", exc_info=True)
     
