@@ -1,8 +1,11 @@
 # Основные зависимости
 Flask[async]==2.3.3
 Flask-SQLAlchemy==3.1.1
-SQLAlchemy==2.0.23
-psycopg2-binary==2.9.10
+SQLAlchemy[asyncio]==2.0.23  # Добавляем asyncio
+asyncpg==0.29.0  # Асинхронный драйвер для PostgreSQL
+
+# Удаляем psycopg2-binary, так как он не поддерживает asyncio
+# psycopg2-binary==2.9.10
 
 # Недостающие зависимости из логов
 aiohttp==3.9.3
