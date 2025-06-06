@@ -621,31 +621,31 @@
                                                 <div class="detail-item">
                                                     <div class="detail-label">Склад-отправитель</div>
                                                     <div class="detail-value">
-                                                        {{ transaction.СкладОтправитель }}
+                                                        {{ get_warehouse_name(transaction.СкладОтправительID) }}
                                                     </div>
                                                 </div>
                                                 <div class="detail-item">
                                                     <div class="detail-label">Склад-получатель</div>
                                                     <div class="detail-value">
-                                                        {{ transaction.СкладПолучатель }}
+                                                        {{ get_warehouse_name(transaction.СкладПолучательID) }}
                                                     </div>
                                                 </div>
                                                 <div class="detail-item">
                                                     <div class="detail-label">Документ</div>
                                                     <div class="detail-value">
-                                                        {{ transaction.Документ }}
+                                                        {{ get_document_type(transaction.ДокументID) }}
                                                     </div>
                                                 </div>
                                                 <div class="detail-item">
                                                     <div class="detail-label">Товар</div>
                                                     <div class="detail-value">
-                                                        {{ transaction.Товар }}
+                                                        {{ get_product_name(transaction.ТоварID) }}
                                                     </div>
                                                 </div>
                                                 <div class="detail-item">
                                                     <div class="detail-label">Количество</div>
                                                     <div class="detail-value">
-                                                        {{ transaction.Количество }} {{ transaction.Единица_Измерения }}
+                                                        {{ transaction.Количество }} {{ get_unit_name(transaction.Единица_ИзмеренияID) }}
                                                     </div>
                                                 </div>
                                             </div>
