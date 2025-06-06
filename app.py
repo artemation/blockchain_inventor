@@ -967,6 +967,18 @@ class Node:
                         block_db.confirmed = True
                         db.session.commit()
                         current_app.logger.info(f"Block #{block.index} committed")
+
+                # Рассылаем информацию о подтверждениях всем узлам
+                confirmation_data = {
+                    'block_index': block.index,
+                    'block_hash': block.hash,
+                    'confirming_nodes': confirmations_list  # Список ID подтвердивших узлов
+                }
+                for node_id, domain in self.nodes.items():
+                    if node_id != self.node_id:
+                        url = f"https://{domain}/receive_confirmations"
+                        await self.send_post_request(node_id, url, confirmation_data)
+                    
             except Exception as e:
                 db.session.rollback()
                 current_app.logger.error(f"Database error committing block #{block.index}: {e}", exc_info=True)
@@ -1682,45 +1694,48 @@ def view_blockchain():
 
         formatted_blocks = []
         total_nodes = len(nodes) + 1  # Учитываем текущий узел
+        required_confirmations = (total_nodes // 3 * 2) + 1  # Кворум
 
         for index in block_indices:
             index = index[0]
             
-            # Получаем все подтверждения для этого блока (без фильтра по node_id)
-            confirmations = BlockchainBlock.query.filter_by(index=index).all()
+            # Получаем все блоки с этим индексом
+            blocks = BlockchainBlock.query.filter_by(index=index).all()
             
-            if not confirmations:
+            if not blocks:
                 continue
 
-            # Группируем по хэшу блока, чтобы обрабатывать блоки с одинаковым содержимым
+            # Группируем по хэшу блока
             blocks_by_hash = {}
-            for conf in confirmations:
-                if conf.hash not in blocks_by_hash:
-                    blocks_by_hash[conf.hash] = []
-                blocks_by_hash[conf.hash].append(conf)
+            for block in blocks:
+                if block.hash not in blocks_by_hash:
+                    blocks_by_hash[block.hash] = []
+                blocks_by_hash[block.hash].append(block)
 
             # Для каждого уникального хэша создаем запись
             for block_hash, blocks in blocks_by_hash.items():
                 main_block = blocks[0]
                 
                 try:
-                    transactions = json.loads(main_block.transactions)
+                    transactions = json.loads(main_block.transactions) if main_block.transactions else []
                     
-                    # Получаем список уникальных узлов, подтвердивших этот блок
-                    confirming_nodes = list({b.confirming_node_id for b in blocks if b.confirmed})
+                    # Получаем список подтвердивших узлов
+                    confirming_nodes = []
+                    for block in blocks:
+                        if block.confirmations:
+                            try:
+                                confirming_nodes.extend(json.loads(block.confirmations))
+                            except json.JSONDecodeError:
+                                pass
+                    
+                    # Удаляем дубликаты
+                    confirming_nodes = list(set(confirming_nodes))
                     confirmations_count = len(confirming_nodes)
                     
                     # Проверяем достижение консенсуса
-                    required_confirmations = (total_nodes // 3 * 2) + 1
                     consensus_reached = confirmations_count >= required_confirmations
                     
-                    # Обновляем статус подтверждения в БД, если консенсус достигнут
-                    if consensus_reached and not all(b.confirmed for b in blocks):
-                        for b in blocks:
-                            b.confirmed = True
-                        db.session.commit()
-                        app.logger.debug(f"Updated confirmed status for block #{index} with hash {block_hash}")
-
+                    # Форматируем транзакции для отображения
                     formatted_transactions = []
                     for transaction in transactions:
                         formatted_transaction = {}
@@ -1755,14 +1770,18 @@ def view_blockchain():
                         'confirmations': confirmations_count,
                         'total_nodes': total_nodes,
                         'confirming_nodes': confirming_nodes,
-                        'consensus_reached': consensus_reached
+                        'consensus_reached': consensus_reached,
+                        'required_confirmations': required_confirmations
                     })
                 except json.JSONDecodeError as e:
                     app.logger.error(f"Error decoding transactions for block {index}: {e}")
                     continue
 
         app.logger.debug(f"Loaded {len(formatted_blocks)} blocks from database")
-        return render_template('blockchain.html', blocks=formatted_blocks)
+        return render_template('blockchain.html', 
+                            blocks=formatted_blocks,
+                            nodes=nodes,
+                            current_node_id=NODE_ID)
     except Exception as e:
         app.logger.error(f"Error in view_blockchain: {e}")
         flash(f'Ошибка при загрузке блокчейна: {e}', 'danger')
@@ -2793,6 +2812,29 @@ async def handle_leader_request():
         return jsonify({'success': True, 'message': message}), 200
     else:
         return jsonify({'success': False, 'message': message}), 400
+
+@app.route('/receive_confirmations', methods=['POST'])
+@csrf.exempt
+async def receive_confirmations():
+    data = request.get_json()
+    block_index = data['block_index']
+    block_hash = data['block_hash']
+    confirming_nodes = data['confirming_nodes']
+    
+    with app.app_context():
+        # Обновляем все блоки с этим индексом и хэшом
+        blocks = BlockchainBlock.query.filter_by(
+            index=block_index,
+            hash=block_hash
+        ).all()
+        
+        for block in blocks:
+            block.confirmations = json.dumps(confirming_nodes)
+            block.confirmed = True
+        
+        db.session.commit()
+    
+    return jsonify({'status': 'Confirmations updated'}), 200
 
 def cleanup():
     """Очищает ресурсы всех узлов при остановке приложения"""
