@@ -749,90 +749,90 @@ class Node:
 
     # В начале работы узла
     async def sync_blockchain(self):
-        current_app.logger.info(f"Node {self.node_id} starting blockchain sync")
-        headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
-        with app.app_context():
-            local_height = db.session.query(func.max(BlockchainBlock.index)).filter_by(node_id=self.node_id).scalar() or -1
-        longest_chain = None
-        max_height = local_height
-    
-        # Запрашиваем высоту блокчейна у других узлов
-        for node_id, domain in self.nodes.items():
-            if node_id == self.node_id:
-                continue
-            try:
-                async with aiohttp.ClientSession(headers=headers) as session:
-                    url = f"https://{domain}/get_blockchain_height"
-                    async with session.get(url, timeout=10) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            remote_height = data.get('height', -1)
-                            if remote_height > max_height:
-                                max_height = remote_height
-                                async with session.get(f"https://{domain}/get_chain", timeout=30) as chain_response:
-                                    if chain_response.status == 200:
-                                        chain_data = await chain_response.json()
-                                        longest_chain = chain_data.get('chain', [])
-                                        current_app.logger.debug(f"Received chain from node {node_id}: {len(longest_chain)} blocks")
-                            else:
-                                current_app.logger.info(f"Node {node_id} height {remote_height} <= local height {local_height}")
-                        else:
-                            current_app.logger.error(f"Failed to get height from node {node_id}: status={response.status}")
-            except Exception as e:
-                current_app.logger.error(f"Error syncing with node {node_id}: {str(e)}")
-    
-        # Синхронизируем только недостающие блоки
-        if longest_chain and max_height > local_height:
-            current_app.logger.info(f"Found longer chain with height {max_height}")
+            current_app.logger.info(f"Node {self.node_id} starting blockchain sync")
+            headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
             with app.app_context():
-                previous_hash = db.session.query(BlockchainBlock.hash).filter_by(
-                    index=local_height, node_id=self.node_id
-                ).scalar() or "0"
-                
-                # Обрабатываем только блоки с индексом больше локального
-                for block_data in longest_chain:
-                    if block_data['index'] <= local_height:
-                        continue  # Пропускаем уже существующие блоки
+                local_height = db.session.query(func.max(BlockchainBlock.index)).filter_by(node_id=self.node_id).scalar() or -1
+            longest_chain = None
+            max_height = local_height
+        
+            # Запрашиваем высоту блокчейна у других узлов
+            for node_id, domain in self.nodes.items():
+                if node_id == self.node_id:
+                    continue
+                try:
+                    async with aiohttp.ClientSession(headers=headers) as session:
+                        url = f"https://{domain}/get_blockchain_height"
+                        async with session.get(url, timeout=10) as response:
+                            if response.status == 200:
+                                data = await response.json()
+                                remote_height = data.get('height', -1)
+                                if remote_height > max_height:
+                                    max_height = remote_height
+                                    async with session.get(f"https://{domain}/get_chain", timeout=30) as chain_response:
+                                        if chain_response.status == 200:
+                                            chain_data = await chain_response.json()
+                                            longest_chain = chain_data.get('chain', [])
+                                            current_app.logger.debug(f"Received chain from node {node_id}: {len(longest_chain)} blocks")
+                                else:
+                                    current_app.logger.info(f"Node {node_id} height {remote_height} <= local height {local_height}")
+                            else:
+                                current_app.logger.error(f"Failed to get height from node {node_id}: status={response.status}")
+                except Exception as e:
+                    current_app.logger.error(f"Error syncing with node {node_id}: {str(e)}")
+        
+            # Синхронизируем только недостающие блоки
+            if longest_chain and max_height > local_height:
+                current_app.logger.info(f"Found longer chain with height {max_height}")
+                with app.app_context():
+                    previous_hash = db.session.query(BlockchainBlock.hash).filter_by(
+                        index=local_height, node_id=self.node_id
+                    ).scalar() or "0"
                     
-                    block = Block(
-                        index=block_data['index'],
-                        timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
-                        transactions=block_data['transactions'],
-                        previous_hash=block_data['previous_hash']
-                    )
-                    if block.calculate_hash() != block_data['hash'] or block.previous_hash != previous_hash:
-                        current_app.logger.error(f"Invalid block #{block_data['index']} from node {node_id}")
-                        return
-                    previous_hash = block_data['hash']
-    
-                    # Проверяем, нет ли блока с таким хешем
-                    existing_block = db.session.query(BlockchainBlock).filter_by(
-                        hash=block_data['hash'],
-                        node_id=self.node_id
-                    ).first()
-                    if not existing_block:
-                        new_block = BlockchainBlock(
+                    # Обрабатываем только блоки с индексом больше локального
+                    for block_data in longest_chain:
+                        if block_data['index'] <= local_height:
+                            continue  # Пропускаем уже существующие блоки
+                        
+                        block = Block(
                             index=block_data['index'],
                             timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
-                            transactions=json.dumps(block_data['transactions'], ensure_ascii=False),
-                            previous_hash=block_data['previous_hash'],
-                            hash=block_data['hash'],
-                            node_id=self.node_id,
-                            confirming_node_id=self.node_id,
-                            confirmed=True
+                            transactions=block_data['transactions'],
+                            previous_hash=block_data['previous_hash']
                         )
-                        db.session.add(new_block)
-                        try:
-                            db.session.commit()
-                            current_app.logger.debug(f"Synced block #{block_data['index']}")
-                        except sqlalchemy.exc.IntegrityError as e:
-                            db.session.rollback()
-                            current_app.logger.error(f"Failed to sync block #{block_data['index']}: {e}")
-                    else:
-                        current_app.logger.debug(f"Block #{block_data['index']} already exists")
-                current_app.logger.info(f"Node {self.node_id} synced to height {max_height}")
-        else:
-            current_app.logger.info(f"No longer chain found, local height {local_height}")
+                        if block.calculate_hash() != block_data['hash'] or block.previous_hash != previous_hash:
+                            current_app.logger.error(f"Invalid block #{block_data['index']} from node {node_id}")
+                            return
+                        previous_hash = block_data['hash']
+        
+                        # Проверяем, нет ли блока с таким хешем
+                        existing_block = db.session.query(BlockchainBlock).filter_by(
+                            hash=block_data['hash'],
+                            node_id=self.node_id
+                        ).first()
+                        if not existing_block:
+                            new_block = BlockchainBlock(
+                                index=block_data['index'],
+                                timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
+                                transactions=json.dumps(block_data['transactions'], ensure_ascii=False),
+                                previous_hash=block_data['previous_hash'],
+                                hash=block_data['hash'],
+                                node_id=self.node_id,
+                                confirming_node_id=self.node_id,
+                                confirmed=True
+                            )
+                            db.session.add(new_block)
+                            try:
+                                db.session.commit()
+                                current_app.logger.debug(f"Synced block #{block_data['index']}")
+                            except sqlalchemy.exc.IntegrityError as e:
+                                db.session.rollback()
+                                current_app.logger.error(f"Failed to sync block #{block_data['index']}: {e}")
+                        else:
+                            current_app.logger.debug(f"Block #{block_data['index']} already exists")
+                    current_app.logger.info(f"Node {self.node_id} synced to height {max_height}")
+            else:
+                current_app.logger.info(f"No longer chain found, local height {local_height}")
 
     async def request_block_from_node(self, node_id, block_index):
         """Запросить блок с определенным индексом у узла"""
