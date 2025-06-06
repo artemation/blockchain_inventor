@@ -1037,22 +1037,22 @@
                     .then(response => response.json())
                     .then(blockData => {
                         if (!blockData.error) {
-                            // Обновляем счетчик подтверждений
-                            const confirmationsElement = blockElement.querySelector('.confirmations-count');
-                            if (confirmationsElement) {
-                                confirmationsElement.textContent = `${blockData.confirmations}/${blockData.total_nodes}`;
-                            }
-        
-                            // Обновляем статус блока
+                            const confirmations = blockData.confirming_nodes.length;
+                            const totalNodes = blockData.total_nodes;
+                            
+                            // Обновляем отображение
                             const statusElement = blockElement.querySelector('.block-status');
-                            if (statusElement) {
-                                const requiredConfirmations = Math.floor(blockData.total_nodes / 3 * 2) + 1;
-                                if (blockData.confirmations >= requiredConfirmations) {
+                            const countElement = blockElement.querySelector('.confirmations-count');
+                            
+                            if (statusElement && countElement) {
+                                countElement.textContent = `${confirmations}/${totalNodes}`;
+                                
+                                if (confirmations >= Math.floor(totalNodes * 2 / 3) + 1) {
                                     statusElement.className = 'badge badge-success block-status';
-                                    statusElement.textContent = `Подтвержден (${blockData.confirmations}/${blockData.total_nodes})`;
+                                    statusElement.textContent = `Подтвержден (${confirmations}/${totalNodes})`;
                                 } else {
                                     statusElement.className = 'badge badge-warning block-status';
-                                    statusElement.textContent = `Ожидает (${blockData.confirmations}/${blockData.total_nodes})`;
+                                    statusElement.textContent = `Ожидает (${confirmations}/${totalNodes})`;
                                 }
                             }
                         }
