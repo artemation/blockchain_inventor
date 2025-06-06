@@ -259,8 +259,8 @@ class Node:
         asyncio.set_event_loop(self.loop)
         self.loop.run_until_complete(self.sync_genesis_block())
         self.loop.run_until_complete(self.sync_view_number())
-        self.start_leader_timeout()
         self.loop.run_until_complete(self.sync_blockchain())
+        self.start_leader_timeout()
 
     def start_leader_timeout(self):
             async def periodic_check():
