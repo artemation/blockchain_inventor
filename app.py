@@ -256,6 +256,43 @@ class Node:
         # self.loop.run_until_complete(self.sync_blockchain())
         self.start_leader_timeout()
 
+        # Гарантированное создание генезис-блока при инициализации
+        self._ensure_genesis_block()
+    
+    def _ensure_genesis_block(self):
+        with app.app_context():
+            # Если генезис-блок уже существует - пропускаем
+            if BlockchainBlock.query.filter_by(index=0, node_id=self.node_id).first():
+                return
+            
+            # Фиксированные данные генезис-блока
+            genesis_data = {
+                'index': 0,
+                'timestamp': '2025-01-01T00:00:00+00:00',
+                'transactions': [{"message": "Genesis Block"}],
+                'previous_hash': "0"
+            }
+            
+            # Рассчитываем хеш
+            block_string = json.dumps(genesis_data, sort_keys=True).encode()
+            genesis_hash = hashlib.sha256(block_string).hexdigest()
+            
+            # Создаем и сохраняем блок
+            genesis_block = BlockchainBlock(
+                index=0,
+                timestamp=datetime(2025, 1, 1, tzinfo=timezone.utc),
+                transactions=json.dumps(genesis_data['transactions']),
+                previous_hash="0",
+                hash=genesis_hash,
+                node_id=self.node_id,
+                confirming_node_id=self.node_id,
+                confirmed=True
+            )
+            
+            db.session.add(genesis_block)
+            db.session.commit()
+            app.logger.info(f"Node {self.node_id}: Genesis block created")
+    
     def start_leader_timeout(self):
             async def periodic_check():
                 while True:
