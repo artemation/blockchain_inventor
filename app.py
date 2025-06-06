@@ -2819,29 +2819,6 @@ async def handle_leader_request():
     else:
         return jsonify({'success': False, 'message': message}), 400
 
-@app.route('/receive_confirmations', methods=['POST'])
-@csrf.exempt
-async def receive_confirmations():
-    data = request.get_json()
-    block_index = data['block_index']
-    block_hash = data['block_hash']
-    confirming_nodes = data['confirming_nodes']
-    
-    with app.app_context():
-        # Обновляем все блоки с этим индексом и хэшом
-        blocks = BlockchainBlock.query.filter_by(
-            index=block_index,
-            hash=block_hash
-        ).all()
-        
-        for block in blocks:
-            block.confirmations = json.dumps(confirming_nodes)
-            block.confirmed = True
-        
-        db.session.commit()
-    
-    return jsonify({'status': 'Confirmations updated'}), 200
-
 def cleanup():
     """Очищает ресурсы всех узлов при остановке приложения"""
     for node_id, node in nodes.items():
