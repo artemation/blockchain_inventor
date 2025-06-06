@@ -2880,6 +2880,31 @@ async def handle_leader_request():
         return jsonify({'success': True, 'message': message}), 200
     else:
         return jsonify({'success': False, 'message': message}), 400
+        
+@app.context_processor
+def utility_processor():
+    def get_warehouse_name(warehouse_id):
+        warehouse = Склады.query.get(warehouse_id)
+        return warehouse.Название if warehouse else "Неизвестный склад"
+    
+    def get_document_type(document_id):
+        doc = Тип_документа.query.get(document_id)
+        return doc.Тип_документа if doc else "Неизвестный документ"
+    
+    def get_product_name(product_id):
+        product = Товары.query.get(product_id)
+        return product.Наименование if product else "Неизвестный товар"
+    
+    def get_unit_name(unit_id):
+        unit = Единица_измерения.query.get(unit_id)
+        return unit.Единица_Измерения if unit else ""
+    
+    return dict(
+        get_warehouse_name=get_warehouse_name,
+        get_document_type=get_document_type,
+        get_product_name=get_product_name,
+        get_unit_name=get_unit_name
+    )
 
 def cleanup():
     """Очищает ресурсы всех узлов при остановке приложения"""
