@@ -780,56 +780,60 @@ class Node:
                     raise
                 return genesis
             
-        async def sync_genesis_block(self):
-            async with async_session() as session:
+    async def sync_genesis_block(self):
+        async with async_session() as session:
             # Проверяем наличие блока для текущего узла
-            existing_block = db.session.query(BlockchainBlock).filter_by(
-                index=0, node_id=self.node_id).first()
+            result = await session.execute(
+                select(BlockchainBlock).filter_by(index=0, node_id=self.node_id)
+            )
+            existing_block = result.scalar_one_or_none()
             if existing_block:
                 app.logger.info(f"Node {self.node_id}: Genesis block exists")
                 return
-        
-            # Пытаемся синхронизировать с другими узлами
-            for node_id, domain in self.nodes.items():
-                if node_id != self.node_id:
-                    url = f"https://{domain}/get_block/0"
-                    try:
-                        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
-                            async with session.get(url) as response:
-                                if response.status == 200:
-                                    block_data = await response.json()
-                                    with app.app_context():
-                                        # Проверяем еще раз перед добавлением
-                                        existing_block = db.session.query(BlockchainBlock).filter_by(
-                                            index=0, node_id=self.node_id).first()
-                                        if not existing_block:
-                                            genesis_block = BlockchainBlock(
-                                                index=block_data['index'],
-                                                timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
-                                                transactions=json.dumps(block_data['transactions'], ensure_ascii=False),
-                                                previous_hash=block_data['previous_hash'],
-                                                hash=block_data['hash'],
-                                                node_id=self.node_id,  # Используем node_id текущего узла
-                                                confirming_node_id=self.node_id,
-                                                confirmed=True
-                                            )
-                                            db.session.add(genesis_block)
-                                            try:
-                                                db.session.commit()
-                                                app.logger.info(f"Node {self.node_id}: Genesis block synced from node {node_id}")
-                                                return
-                                            except sqlalchemy.exc.IntegrityError as e:
-                                                db.session.rollback()
-                                                app.logger.warning(f"Node {self.node_id}: Failed to sync genesis block from node {node_id}: {e}")
-                                                continue
-                                else:
-                                    app.logger.warning(f"Node {self.node_id}: Failed to fetch genesis block from node {node_id}, status={response.status}")
-                    except Exception as e:
-                        app.logger.error(f"Node {self.node_id}: Failed to sync genesis from node {node_id}: {e}")
-        
-            # Создаем локальный блок только если синхронизация не удалась
-            app.logger.info(f"Node {self.node_id}: Creating local genesis block")
-            self.create_genesis_block()
+    
+        # Пытаемся синхронизировать с другими узлами
+        for node_id, domain in self.nodes.items():
+            if node_id != self.node_id:
+                url = f"https://{domain}/get_block/0"
+                try:
+                    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
+                        async with session.get(url) as response:
+                            if response.status == 200:
+                                block_data = await response.json()
+                                # Проверяем еще раз перед добавлением
+                                async with async_session() as local_session:
+                                    result = await local_session.execute(
+                                        select(BlockchainBlock).filter_by(index=0, node_id=self.node_id)
+                                    )
+                                    existing_block = result.scalar_one_or_none()
+                                    if not existing_block:
+                                        genesis_block = BlockchainBlock(
+                                            index=block_data['index'],
+                                            timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
+                                            transactions=json.dumps(block_data['transactions'], ensure_ascii=False),
+                                            previous_hash=block_data['previous_hash'],
+                                            hash=block_data['hash'],
+                                            node_id=self.node_id,
+                                            confirming_node_id=self.node_id,
+                                            confirmed=True
+                                        )
+                                        local_session.add(genesis_block)
+                                        try:
+                                            await local_session.commit()
+                                            app.logger.info(f"Node {self.node_id}: Genesis block synced from node {node_id}")
+                                            return
+                                        except sqlalchemy.exc.IntegrityError as e:
+                                            await local_session.rollback()
+                                            app.logger.warning(f"Node {self.node_id}: Failed to sync genesis block from node {node_id}: {e}")
+                                            continue
+                            else:
+                                app.logger.warning(f"Node {self.node_id}: Failed to fetch genesis block from node {node_id}, status={response.status}")
+                except Exception as e:
+                    app.logger.error(f"Node {self.node_id}: Failed to sync genesis from node {node_id}: {e}")
+    
+        # Создаем локальный блок только если синхронизация не удалась
+        app.logger.info(f"Node {self.node_id}: Creating local genesis block")
+        self.create_genesis_block()
 
     async def sync_view_number(self):
         tasks = []
