@@ -536,13 +536,13 @@
                             {% endif %}
 
                             <span class="badge block-status 
-                                {% if block.consensus_reached %}badge-success{% else %}badge-warning{% endif %}">
-                                {% if block.consensus_reached %}
+                                {% if block.confirmations >= block.required_confirmations %}badge-success{% else %}badge-warning{% endif %}">
+                                {% if block.confirmations >= block.required_confirmations %}
                                     Подтвержден
                                 {% else %}
                                     Ожидает
                                 {% endif %}
-                                (<span class="confirmations-count">{{ block.confirmations }}/{{ block.total_nodes }}</span>)
+                                (<span class="confirmations-count">{{ block.confirmations }}/{{ block.required_confirmations }}</span>)
                             </span>
                         </h3>
                         <div>
@@ -580,6 +580,18 @@
                                     </div>
                                 </div>
                             {% endif %}
+                            <div class="meta-item">
+                                <div class="meta-label">Подтвердившие узлы</div>
+                                <div class="meta-value">
+                                    {% if block.confirming_nodes %}
+                                        {% for node_id in block.confirming_nodes %}
+                                            <span class="badge node-badge node-{{ node_id }}">Узел {{ node_id }}</span>
+                                        {% endfor %}
+                                    {% else %}
+                                        <span class="text-muted">Нет подтверждений</span>
+                                    {% endif %}
+                                </div>
+                            </div>
                         </div>
 
                         <h4 class="mb-3">
