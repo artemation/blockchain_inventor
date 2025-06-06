@@ -1646,7 +1646,7 @@ async def test_transaction():
             'Количество': 10.0,
             'Единица_ИзмеренияID': 3,
             'timestamp': datetime.now(timezone.utc).isoformat(),
-            'user_id': current_user.id  # Добавляем ID текущего пользователя
+            'user_id': current_user.id
         }
 
         # Получаем текущий узел
@@ -1660,8 +1660,9 @@ async def test_transaction():
         elif current_user.role == 'west':
             node_id = 3
 
-        # Применяем транзакцию напрямую
-        app.logger.debug(f"Testing direct transaction application on node {node_id}")
+        # Синхронизируем блокчейн перед обработкой транзакции
+        app.logger.debug(f"Synchronizing blockchain for node {node_id}")
+        await nodes[node_id].sync_blockchain()
 
         # Проверка наличия товара и склада в БД
         with app.app_context():
@@ -2914,11 +2915,12 @@ atexit.register(cleanup)
 
 
 if __name__ == '__main__':
-    with app.app_context():  # Добавляем контекст приложения
+    with app.app_context():
         current_node = nodes[NODE_ID]
         loop = asyncio.get_event_loop()
-        loop.run_until_complete(start_sync(current_node))
-        loop.run_until_complete(current_node.sync_genesis_block())  # Уже есть в вашем коде
-        loop.run_until_complete(current_node.sync_view_number())    # Уже есть в вашем коде
-        loop.run_until_complete(current_node.sync_blockchain())     # Добавляем sync_blockchain
+        # Выполняем синхронизацию синхронно
+        loop.run_until_complete(current_node.sync_genesis_block())
+        loop.run_until_complete(current_node.sync_view_number())
+        loop.run_until_complete(current_node.sync_blockchain())
+        app.logger.info(f"Node {NODE_ID} fully synchronized before starting")
         app.run(host='0.0.0.0', port=PORT)
