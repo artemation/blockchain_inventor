@@ -954,32 +954,37 @@ class Node:
             if confirmations >= required_confirmations:
                 try:
                     with current_app.app_context():
-                        # Проверяем существование блока перед сохранением
+                        # Проверяем существование блока
                         existing_block = db.session.query(BlockchainBlock).filter_by(
                             hash=block_db.hash, node_id=self.node_id
                         ).first()
                         if not existing_block:
                             db.session.add(transaction_record)
                             db.session.add(block_db)
-                            db.session.commit()
-                            current_app.logger.info(f"Block #{block.index} committed")
+                            current_app.logger.info(f"Block #{block.index} created and committed")
                         else:
-                            current_app.logger.info(f"Block #{block.index} already exists, skipping commit")
+                            current_app.logger.info(f"Block #{block.index} already exists, updating confirmations")
                         
+                        # Обновляем поле confirmations и confirmed для блока
                         block_db.confirmations = json.dumps(confirmations_list)
                         block_db.confirmed = True
+                        if existing_block:
+                            existing_block.confirmations = json.dumps(confirmations_list)
+                            existing_block.confirmed = True
                         db.session.commit()
                     
-                    # Рассылаем подтверждения
+                    # Рассылаем подтверждения другим узлам
                     confirmation_data = {
                         'block_index': block.index,
                         'block_hash': block.hash,
                         'confirming_nodes': confirmations_list
                     }
+                    tasks = []
                     for node_id, domain in self.nodes.items():
                         if node_id != self.node_id:
                             url = f"https://{domain}/receive_confirmations"
-                            await self.send_post_request(node_id, url, confirmation_data)
+                            tasks.append(self.send_post_request(node_id, url, confirmation_data))
+                    await asyncio.gather(*tasks, return_exceptions=True)
                         
                 except Exception as e:
                     db.session.rollback()
@@ -989,6 +994,7 @@ class Node:
                 current_app.logger.warning(f"Consensus not reached for block #{block.index}: {confirmations}/{required_confirmations}")
                 db.session.rollback()
             
+            current_app.logger.info(f"Consensus reached for block #{block.index}")
             return confirmations, total_nodes
 
     # Проверка доступности узла
