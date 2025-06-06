@@ -954,19 +954,13 @@ class Node:
         if confirmations >= required_confirmations:
             try:
                 with current_app.app_context():
-                    existing_block = db.session.query(BlockchainBlock).filter_by(
-                        hash=block.hash,
-                        node_id=self.node_id
-                    ).first()
-                    if existing_block:
-                        if not existing_block.confirmed:
-                            existing_block.confirmed = True
-                            db.session.commit()
-                            current_app.logger.info(f"Block #{block.index} already exists, updated confirmation")
-                    else:
+                    # Сохраняем подтверждения в любом случае
+                    block_db.confirmations = json.dumps(confirmations_list)
+                    block_db.confirmed = True
+                    
+                    if not existing_block:
                         db.session.add(transaction_record)
                         db.session.add(block_db)
-                        block_db.confirmed = True
                         db.session.commit()
                         current_app.logger.info(f"Block #{block.index} committed")
 
@@ -1689,97 +1683,47 @@ def check_node_availability_sync(node_id):
 def view_blockchain():
     """Отображает всю цепочку блоков с информацией о подтверждениях"""
     try:
-        # Получаем все уникальные индексы блоков
-        block_indices = db.session.query(
-            BlockchainBlock.index
-        ).distinct().order_by(BlockchainBlock.index).all()
-
+        # Получаем все блоки для текущего узла
+        blocks = BlockchainBlock.query.filter_by(node_id=NODE_ID).order_by(BlockchainBlock.index.asc()).all()
+        
         formatted_blocks = []
-        total_nodes = len(NODE_DOMAINS)  # Используем глобальный словарь узлов
+        total_nodes = len(NODE_DOMAINS)
         required_confirmations = (total_nodes // 3 * 2) + 1  # Кворум
 
-        for index in block_indices:
-            index = index[0]
-            
-            # Получаем все блоки с этим индексом
-            blocks = BlockchainBlock.query.filter_by(index=index).all()
-            
-            if not blocks:
+        for block in blocks:
+            try:
+                # Получаем список подтвердивших узлов
+                confirming_nodes = []
+                if block.confirmations:
+                    try:
+                        confirming_nodes = json.loads(block.confirmations)
+                    except:
+                        confirming_nodes = []
+
+                confirmations_count = len(confirming_nodes)
+                consensus_reached = confirmations_count >= required_confirmations
+                
+                # Загружаем транзакции
+                transactions = json.loads(block.transactions) if block.transactions else []
+                
+                formatted_blocks.append({
+                    'index': block.index,
+                    'timestamp': block.timestamp,
+                    'transactions': transactions,
+                    'previous_hash': block.previous_hash,
+                    'hash': block.hash,
+                    'node_id': block.node_id,
+                    'is_genesis': block.index == 0,
+                    'confirmations': confirmations_count,
+                    'total_nodes': total_nodes,
+                    'confirming_nodes': confirming_nodes,
+                    'consensus_reached': consensus_reached,
+                    'required_confirmations': required_confirmations
+                })
+            except Exception as e:
+                app.logger.error(f"Error processing block {block.index}: {str(e)}")
                 continue
 
-            # Группируем по хэшу блока
-            blocks_by_hash = {}
-            for block in blocks:
-                if block.hash not in blocks_by_hash:
-                    blocks_by_hash[block.hash] = []
-                blocks_by_hash[block.hash].append(block)
-
-            # Для каждого уникального хэша создаем запись
-            for block_hash, block_list in blocks_by_hash.items():
-                main_block = block_list[0]
-                try:
-                    # Получаем список подтвердивших узлов
-                    confirming_nodes = []
-                    for block in block_list:
-                        if block.confirmations:
-                            try:
-                                confirming_nodes.extend(json.loads(block.confirmations))
-                            except json.JSONDecodeError:
-                                pass
-                    
-                    # Удаляем дубликаты
-                    confirming_nodes = list(set(confirming_nodes))
-                    confirmations_count = len(confirming_nodes)
-                    
-                    # Проверяем достижение консенсуса
-                    consensus_reached = confirmations_count >= required_confirmations
-                    
-                    # Загружаем транзакции из блока
-                    transactions = json.loads(main_block.transactions) if main_block.transactions else []
-                    
-                    # Форматируем транзакции для отображения
-                    formatted_transactions = []
-                    for transaction in transactions:
-                        formatted_transaction = {}
-                        for key, value in transaction.items():
-                            if key == 'СкладОтправительID':
-                                склад = Склады.query.get(value)
-                                formatted_transaction['СкладОтправитель'] = f"{склад.Название} (ID: {value})" if склад else f"Склад (ID: {value})"
-                            elif key == 'СкладПолучательID':
-                                склад = Склады.query.get(value)
-                                formatted_transaction['СкладПолучатель'] = f"{склад.Название} (ID: {value})" if склад else f"Склад (ID: {value})"
-                            elif key == 'ДокументID':
-                                doc = Тип_документа.query.get(value)
-                                formatted_transaction['Документ'] = f"{doc.Тип_документа} (ID: {value})" if doc else f"Документ (ID: {value})"
-                            elif key == 'ТоварID':
-                                товар = Товары.query.get(value)
-                                formatted_transaction['Товар'] = f"{товар.Наименование} (ID: {value})" if товар else f"Товар (ID: {value})"
-                            elif key == 'Единица_ИзмеренияID':
-                                unit = Единица_измерения.query.get(value)
-                                formatted_transaction['Единица_Измерения'] = f"{unit.Единица_Измерения} (ID: {value})" if unit else f"Ед. изм. (ID: {value})"
-                            else:
-                                formatted_transaction[key] = value
-                        formatted_transactions.append(formatted_transaction)
-                    
-                    formatted_blocks.append({
-                        'index': index,
-                        'timestamp': main_block.timestamp,
-                        'transactions': formatted_transactions,
-                        'previous_hash': main_block.previous_hash,
-                        'hash': main_block.hash,
-                        'node_id': main_block.node_id,
-                        'is_genesis': index == 0,
-                        'confirmations': confirmations_count,
-                        'total_nodes': total_nodes,
-                        'confirming_nodes': confirming_nodes,
-                        'consensus_reached': consensus_reached,
-                        'required_confirmations': required_confirmations
-                    })
-                except json.JSONDecodeError as e:
-                    app.logger.error(f"Error decoding transactions for block {index}: {e}")
-                    continue
-
-        app.logger.debug(f"Loaded {len(formatted_blocks)} blocks from database")
         return render_template('blockchain.html', 
                             blocks=formatted_blocks,
                             nodes=nodes,
