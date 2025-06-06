@@ -1695,7 +1695,7 @@ def view_blockchain():
         ).distinct().order_by(BlockchainBlock.index).all()
 
         formatted_blocks = []
-        total_nodes = len(nodes) + 1  # Учитываем текущий узел
+        total_nodes = len(NODE_DOMAINS)  # Используем глобальный словарь узлов
         required_confirmations = (total_nodes // 3 * 2) + 1  # Кворум
 
         for index in block_indices:
@@ -1715,16 +1715,12 @@ def view_blockchain():
                 blocks_by_hash[block.hash].append(block)
 
             # Для каждого уникального хэша создаем запись
-            for block_hash, blocks in blocks_by_hash.items():
-                main_block = blocks[0]
+            for block_hash, block_list in blocks_by_hash.items():
+                main_block = block_list[0]
                 try:
-                    # Получаем список подтвердивших узлов из JSON
-                    confirming_nodes = json.loads(main_block.confirmations) if main_block.confirmations else []
-                    confirmations_count = len(confirming_nodes)
-                    
                     # Получаем список подтвердивших узлов
                     confirming_nodes = []
-                    for block in blocks:
+                    for block in block_list:
                         if block.confirmations:
                             try:
                                 confirming_nodes.extend(json.loads(block.confirmations))
@@ -1737,6 +1733,9 @@ def view_blockchain():
                     
                     # Проверяем достижение консенсуса
                     consensus_reached = confirmations_count >= required_confirmations
+                    
+                    # Загружаем транзакции из блока
+                    transactions = json.loads(main_block.transactions) if main_block.transactions else []
                     
                     # Форматируем транзакции для отображения
                     formatted_transactions = []
