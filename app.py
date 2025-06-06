@@ -234,10 +234,6 @@ node_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelnam
 node_logger.addHandler(node_handler)
 
 class Node:
-    # Константы для таймеров
-    LEADER_TIMEOUT = 30  # Время ожидания ответа от лидера (в секундах)
-    VIEW_CHANGE_TIMEOUT = 5  # Таймаут для процесса смены вида
-
     def __init__(self, node_id, nodes, host, port):
         self.node_id = node_id
         self.nodes = nodes
@@ -253,13 +249,14 @@ class Node:
         self.chain = []
         self.leader_timeout = None
         self.view_change_in_progress = False
-        self.consensus_times = []  # Список времен достижения консенсуса
-        self.view_change_success = []  # Список результатов смены вида (True/False)
+        self.consensus_times = []
+        self.view_change_success = []
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
-        self.loop.run_until_complete(self.sync_genesis_block())
-        self.loop.run_until_complete(self.sync_view_number())
-        self.loop.run_until_complete(self.sync_blockchain())
+        # Удаляем следующие строки:
+        # self.loop.run_until_complete(self.sync_genesis_block())
+        # self.loop.run_until_complete(self.sync_view_number())
+        # self.loop.run_until_complete(self.sync_blockchain())
         self.start_leader_timeout()
 
     def start_leader_timeout(self):
@@ -2915,8 +2912,13 @@ def cleanup():
 
 atexit.register(cleanup)
 
+
 if __name__ == '__main__':
-    current_node = nodes[NODE_ID]
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(start_sync(current_node))
-    app.run(host='0.0.0.0', port=PORT)
+    with app.app_context():  # Добавляем контекст приложения
+        current_node = nodes[NODE_ID]
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(start_sync(current_node))
+        loop.run_until_complete(current_node.sync_genesis_block())  # Уже есть в вашем коде
+        loop.run_until_complete(current_node.sync_view_number())    # Уже есть в вашем коде
+        loop.run_until_complete(current_node.sync_blockchain())     # Добавляем sync_blockchain
+        app.run(host='0.0.0.0', port=PORT)
