@@ -71,7 +71,7 @@ db_host = os.environ.get('DB_HOST')
 db_port = os.environ.get('DB_PORT', '5432')
 db_name = os.environ.get('DB_NAME')
 
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL').replace('postgres://', 'postgresql://', 1)
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL').replace('postgres://', 'postgresql+asyncpg://', 1)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your_default_secret_key')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['WTF_CSRF_ENABLED'] = True
@@ -84,19 +84,27 @@ login_manager.init_app(app)
 login_manager.login_view = 'login'
 
 # Настройка асинхронного движка (в начале app.py)
-engine = create_async_engine(app.config['SQLALCHEMY_DATABASE_URI'])
+async_engine_uri = app.config['SQLALCHEMY_DATABASE_URI'].replace('postgresql://', 'postgresql+asyncpg://', 1)
+engine = create_async_engine(async_engine_uri)
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 # Функция для отключения CSRF для определенных маршрутов
 
 
 @login_manager.user_loader
-def load_user(user_id):
-    return db.session.execute(select(User).filter_by(id=user_id)).scalar_one_or_none()
+async def load_user(user_id):
+    async with async_session() as session:
+        result = await session.execute(select(User).filter_by(id=user_id))
+        return result.scalar_one_or_none()
 
 @app.route('/health')
-def health_check():
-    return jsonify({'status': 'ok'}), 200
+async def health_check():
+    try:
+        async with async_session() as session:
+            await session.execute(text("SELECT 1"))
+        return jsonify({'status': 'ok'}), 200
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 @app.route('/get_blockchain_height', methods=['GET'])
@@ -772,8 +780,8 @@ class Node:
                     raise
                 return genesis
             
-    async def sync_genesis_block(self):
-        with app.app_context():
+        async def sync_genesis_block(self):
+            async with async_session() as session:
             # Проверяем наличие блока для текущего узла
             existing_block = db.session.query(BlockchainBlock).filter_by(
                 index=0, node_id=self.node_id).first()
