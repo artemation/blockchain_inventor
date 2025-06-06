@@ -906,6 +906,7 @@ class Node:
         f = (total_nodes - 1) // 3
         required_confirmations = 2 * f + 1
         confirmations = 1  # Считаем текущий узел
+        confirmations_list = [self.node_id]  # Начинаем с текущего узла
         
         block_dict = {
             'index': block.index,
@@ -929,13 +930,14 @@ class Node:
         responses = await asyncio.gather(*tasks, return_exceptions=True)
         for node_id, response in responses:
             if isinstance(response, Exception):
-                current_app.logger.error(f"Error sending to node {node_id}: {response}")
+                app.logger.error(f"Error sending to node {node_id}: {response}")
                 continue
             try:
                 status, body = response
                 current_app.logger.debug(f"Node {node_id} response: status={status}, body={body}")
                 if status == 200 and body.get("status") in ["Block accepted", "Block already exists"]:
                     confirmations += 1
+                    confirmations_list.append(node_id)  # Добавляем узел в список подтвердивших
                     current_app.logger.info(f"Node {node_id} confirmed block #{block.index}")
                 else:
                     current_app.logger.error(f"Node {node_id} failed to confirm block #{block.index}: {body}")
@@ -972,7 +974,7 @@ class Node:
                 confirmation_data = {
                     'block_index': block.index,
                     'block_hash': block.hash,
-                    'confirming_nodes': confirmations_list  # Список ID подтвердивших узлов
+                    'confirming_nodes': confirmations_list
                 }
                 for node_id, domain in self.nodes.items():
                     if node_id != self.node_id:
@@ -1715,9 +1717,10 @@ def view_blockchain():
             # Для каждого уникального хэша создаем запись
             for block_hash, blocks in blocks_by_hash.items():
                 main_block = blocks[0]
-                
                 try:
-                    transactions = json.loads(main_block.transactions) if main_block.transactions else []
+                    # Получаем список подтвердивших узлов из JSON
+                    confirming_nodes = json.loads(main_block.confirmations) if main_block.confirmations else []
+                    confirmations_count = len(confirming_nodes)
                     
                     # Получаем список подтвердивших узлов
                     confirming_nodes = []
@@ -2524,7 +2527,17 @@ def get_block_details(block_index):
         transactions = json.loads(main_block.transactions) if main_block.transactions else []
         
         # Получаем список уникальных узлов, подтвердивших этот блок
-        confirming_nodes = list({b.confirming_node_id for b in blocks})
+        confirming_nodes = []
+        for block in blocks:
+            if block.confirmations:
+                try:
+                    nodes_list = json.loads(block.confirmations)
+                    confirming_nodes.extend(nodes_list)
+                except json.JSONDecodeError:
+                    pass
+        
+        # Удаляем дубликаты
+        confirming_nodes = list(set(confirming_nodes))
         
         return jsonify({
             'index': main_block.index,
@@ -2542,43 +2555,36 @@ def get_block_details(block_index):
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/receive_confirmation', methods=['POST'])
-
-async def receive_confirmation():
-    """Обработчик для приема подтверждений блоков от других узлов"""
+@app.route('/receive_confirmations', methods=['POST'])
+@csrf.exempt
+async def receive_confirmations():
     try:
         data = request.get_json()
         if not data:
             return jsonify({"error": "No data provided"}), 400
-
-        block = data['block']
-        confirming_node_id = data['confirming_node_id']
-
-        # Проверяем, существует ли уже такое подтверждение
-        existing = BlockchainBlock.query.filter_by(
-            index=block['index'],
-            node_id=block['node_id'],
-            confirming_node_id=confirming_node_id
-        ).first()
-
-        if not existing:
-            new_confirmation = BlockchainBlock(
-                index=block['index'],
-                timestamp=datetime.fromisoformat(block['timestamp']),
-                transactions=json.dumps(block['transactions']),
-                previous_hash=block['previous_hash'],
-                hash=block['hash'],
-                node_id=block['node_id'],
-                confirming_node_id=confirming_node_id,
-                confirmed=False
-            )
-            db.session.add(new_confirmation)
+        
+        block_index = data['block_index']
+        block_hash = data['block_hash']
+        confirming_nodes = data['confirming_nodes']
+        
+        with app.app_context():
+            # Обновляем все блоки с этим индексом и хэшом
+            blocks = BlockchainBlock.query.filter_by(
+                index=block_index,
+                hash=block_hash
+            ).all()
+            
+            for block in blocks:
+                # Сохраняем список подтвердивших узлов как JSON
+                block.confirmations = json.dumps(confirming_nodes)
+                block.confirmed = True
+            
             db.session.commit()
-
-        return jsonify({"status": "Confirmation accepted"}), 200
-
+        
+        return jsonify({'status': 'Confirmations updated'}), 200
+    
     except Exception as e:
-        app.logger.error(f"Error processing confirmation: {e}")
+        app.logger.error(f"Error processing confirmations: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/get_chain', methods=['GET'])
