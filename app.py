@@ -193,12 +193,18 @@ class Block:
         self.hash = self.calculate_hash()
 
     def calculate_hash(self):
-        block_string = json.dumps({
+        block_data = {
             'index': self.index,
             'timestamp': self.timestamp.isoformat(),
             'transactions': self.transactions,
             'previous_hash': self.previous_hash
-        }, sort_keys=True).encode('utf-8')
+        }
+        block_string = json.dumps(block_data, sort_keys=True, ensure_ascii=False).encode('utf-8')
+        current_app.logger.debug(
+            f"Calculating hash for block #{self.index}: "
+            f"block_data={json.dumps(block_data, sort_keys=True, ensure_ascii=False)}, "
+            f"block_string={block_string.decode('utf-8')}"
+        )
         return hashlib.sha256(block_string).hexdigest()
 
     def to_dict(self):
@@ -774,6 +780,7 @@ class Node:
                             block_data = await response.json()
     
                     # Проверяем целостность блока
+                    current_app.logger.debug(f"Raw block_data for block #{index}: {json.dumps(block_data, ensure_ascii=False)}")
                     block = Block(
                         index=block_data['index'],
                         timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
