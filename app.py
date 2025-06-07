@@ -2843,10 +2843,7 @@ async def handle_leader_request():
         return jsonify({'success': False, 'message': message}), 400
 
 @app.route('/debug_local_chain', methods=['GET'])
-
 def debug_local_chain():
-    if not current_user.is_admin:
-        return jsonify({'success': False, 'message': 'Access denied'}), 403
     try:
         with app.app_context():
             blocks = BlockchainBlock.query.filter_by(node_id=NODE_ID).order_by(BlockchainBlock.index.asc()).all()
@@ -2859,9 +2856,11 @@ def debug_local_chain():
                     'confirmed': block.confirmed
                 } for block in blocks
             ]
-        return jsonify({'node_id': NODE_ID, 'chain': chain_data}), 200
+            current_app.logger.info(f"Successfully fetched {len(chain_data)} blocks for node {NODE_ID}")
+            return jsonify({'node_id': NODE_ID, 'chain': chain_data}), 200
     except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
+        current_app.logger.error(f"Error in debug_local_chain: {str(e)}")
+        return jsonify({'success': False, 'message': f'Internal server error: {str(e)}'}), 500
 
 @app.context_processor
 def utility_processor():
