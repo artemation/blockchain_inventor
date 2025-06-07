@@ -283,34 +283,22 @@ class Node:
         self._ensure_genesis_block()
     
     def _ensure_genesis_block(self):
-        with app.app_context():
-            if BlockchainBlock.query.filter_by(index=0, node_id=self.node_id).first():
-                return
-            
-            genesis_data = {
-                'index': 0,
-                'timestamp': '2025-01-01T00:00:00+00:00',
-                'transactions': [{"message": "Genesis Block"}],
-                'previous_hash': "0"  # Без пробелов
-            }
-            
-            block_string = json.dumps(genesis_data, sort_keys=True, ensure_ascii=False).encode('utf-8')
-            genesis_hash = hashlib.sha256(block_string).hexdigest()
-            
-            genesis_block = BlockchainBlock(
+        genesis_block = BlockchainBlock.query.filter_by(index=0, node_id=self.node_id).first()
+        if not genesis_block:
+            blockchain_block = BlockchainBlock(
                 index=0,
-                timestamp=datetime(2025, 1, 1, tzinfo=timezone.utc),
-                transactions=json.dumps(genesis_data['transactions'], ensure_ascii=False),
-                previous_hash="0",  # Без пробелов
-                hash=genesis_hash,
+                timestamp=datetime.datetime.fromisoformat("2025-01-01T00:00:00+00:00"),
+                transactions=["Genesis Block"],
+                previous_hash="0",
                 node_id=self.node_id,
-                confirming_node_id=self.node_id,
-                confirmed=True
             )
-            
-            db.session.add(genesis_block)
-            db.session.commit()
-            app.logger.info(f"Node {self.node_id}: Genesis block created with hash {genesis_hash}")
+            blockchain_block.hash = blockchain_block.compute_hash()
+            db.session.add(blockchain_block)
+            try:
+                db.session.commit()
+            except IntegrityError:
+                db.session.rollback()
+                app.logger.warning(f"Genesis block already exists for node {self.node_id}")
     
     def start_leader_timeout(self):
             async def periodic_check():
