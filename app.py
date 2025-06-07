@@ -781,13 +781,13 @@ class Node:
                         previous_hash=block_data['previous_hash']
                     )
                     calculated_hash = block.calculate_hash()
-                    block_string = (
-                        f"{block.index}{block.timestamp.isoformat()}{json.dumps(block.transactions, sort_keys=True, ensure_ascii=False)}{block.previous_hash}"
-                    )
                     current_app.logger.debug(
                         f"Block #{index} from node {source_node_id}: "
                         f"calculated_hash={calculated_hash}, expected_hash={block_data['hash']}, "
-                        f"block_string={block_string}"
+                        f"index={block.index}, "
+                        f"timestamp={block.timestamp.isoformat()}, "
+                        f"serialized_transactions={json.dumps(block.transactions, sort_keys=True, ensure_ascii=False)}, "
+                        f"previous_hash={block.previous_hash}"
                     )
                     if calculated_hash != block_data['hash']:
                         current_app.logger.error(
@@ -2890,6 +2890,33 @@ async def sync_blockchain_route():
     
     except Exception as e:
         current_app.logger.error(f"Error syncing blockchain for node {NODE_ID}: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/reset_blockchain', methods=['POST'])
+@csrf.exempt
+async def reset_blockchain():
+    """Сбрасывает локальную цепочку и выполняет полную синхронизацию"""
+    try:
+        node = nodes.get(NODE_ID)
+        if not node:
+            current_app.logger.error(f"Node {NODE_ID} not found")
+            return jsonify({'success': False, 'message': 'Node not found'}), 404
+        
+        with app.app_context():
+            BlockchainBlock.query.filter_by(node_id=NODE_ID).delete()
+            db.session.commit()
+            node._ensure_genesis_block()
+            db.session.commit()
+            current_app.logger.info(f"Node {NODE_ID} reset blockchain and recreated genesis block")
+            await node.sync_blockchain()
+            
+            height = db.session.query(func.max(BlockchainBlock.index)).filter_by(node_id=NODE_ID).scalar() or -1
+        current_app.logger.info(f"Node {NODE_ID} synced to height {height}")
+        
+        return jsonify({'success': True, 'message': f'Blockchain reset and synced to height {height}'}), 200
+    
+    except Exception as e:
+        current_app.logger.error(f"Error resetting blockchain for node {NODE_ID}: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.context_processor
