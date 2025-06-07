@@ -1384,86 +1384,148 @@ async def check_node_availability(self, node_id):
 @app.route('/receive_block', methods=['POST'])
 @csrf.exempt
 async def receive_block():
-    data = request.get_json()
-    app.logger.debug(f"Received block request: {data}")
-    sender_id = data.get('sender_id')
-    block_data = data.get('block')
-    
-    if sender_id is None or block_data is None:
-        app.logger.error(f"Invalid block data: sender_id={sender_id}, block_data={block_data}")
-        return jsonify({'error': 'Invalid block data'}), 400
-    
+    """Обрабатывает получение нового блока от других узлов."""
     try:
-        sender_id = int(sender_id)
-    except (ValueError, TypeError):
-        app.logger.error(f"Invalid sender_id: {sender_id}")
-        return jsonify({'error': 'Invalid sender_id'}), 400
-    
-    node = nodes.get(NODE_ID)  # Get the current node
-    if not node:
-        app.logger.error(f"Current node {NODE_ID} not found")
-        return jsonify({'error': 'Node not found'}), 404
-    
-    with app.app_context():
-        # Check if block already exists
-        existing_block = db.session.query(BlockchainBlock).filter_by(
-            hash=block_data['hash'], node_id=NODE_ID).first()
-        if existing_block:
-            app.logger.info(f"Block #{block_data['index']} already exists for node {NODE_ID}")
-            return jsonify({'status': 'Block already exists'}), 200
+        data = request.get_json()
+        if not data or 'sender_id' not in data or 'block' not in data:
+            current_app.logger.error("Invalid block data format")
+            return jsonify({'error': 'Invalid block data format'}), 400
+
+        sender_id = data['sender_id']
+        block_data = data['block']
         
-        # Create block object
-        try:
+        # Проверяем обязательные поля блока
+        required_fields = ['index', 'timestamp', 'transactions', 'previous_hash', 'hash']
+        for field in required_fields:
+            if field not in block_data:
+                current_app.logger.error(f"Missing required field in block: {field}")
+                return jsonify({'error': f'Missing required field: {field}'}), 400
+
+        with app.app_context():
+            # Проверяем, не существует ли уже блок с таким хэшем
+            existing_block = BlockchainBlock.query.filter_by(
+                hash=block_data['hash'], node_id=NODE_ID
+            ).first()
+            if existing_block:
+                current_app.logger.info(f"Block #{block_data['index']} already exists")
+                return jsonify({'status': 'Block already exists'}), 200
+
+            # Проверяем предыдущий хэш
+            previous_block = BlockchainBlock.query.filter_by(
+                index=block_data['index'] - 1, node_id=NODE_ID
+            ).first()
+            expected_previous_hash = previous_block.hash if previous_block else "0"
+            if block_data['previous_hash'] != expected_previous_hash:
+                current_app.logger.error(
+                    f"Invalid previous_hash for block #{block_data['index']}: "
+                    f"expected {expected_previous_hash}, got {block_data['previous_hash']}"
+                )
+                return jsonify({'error': 'Invalid previous hash'}), 400
+
+            # Создаем объект блока для проверки хэша
             block = Block(
                 index=block_data['index'],
                 timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
                 transactions=block_data['transactions'],
                 previous_hash=block_data['previous_hash']
             )
-            block.hash = block_data['hash']
-        except Exception as e:
-            app.logger.error(f"Failed to create block object: {e}")
-            return jsonify({'error': 'Invalid block format'}), 400
-        
-        # Validate block
-        last_block = db.session.query(BlockchainBlock).filter_by(node_id=NODE_ID).order_by(BlockchainBlock.index.desc()).first()
-        if last_block:
-            if block.previous_hash != last_block.hash.strip():  # Ensure no spaces affect comparison
-                app.logger.error(f"Invalid previous_hash: expected {last_block.hash}, got {block.previous_hash}")
-                return jsonify({'error': 'Invalid block: previous_hash mismatch'}), 400
-            if block.index != last_block.index + 1:
-                app.logger.error(f"Invalid index: expected {last_block.index + 1}, got {block.index}")
-                return jsonify({'error': 'Invalid block: index mismatch'}), 400
-        else:
-            if block.index != 0:
-                app.logger.error(f"Expected genesis block, got index {block.index}")
-                return jsonify({'error': 'Invalid block: expected genesis block'}), 400
-        
-        calculated_hash = block.calculate_hash()
-        if calculated_hash != block.hash:
-            app.logger.error(f"Hash mismatch: calculated {calculated_hash}, got {block.hash}")
-            return jsonify({'error': 'Invalid block: hash mismatch'}), 400
-        
-        # Save the block if valid
-        block_db = BlockchainBlock(
-            index=block.index,
-            timestamp=block.timestamp,
-            transactions=json.dumps(block.transactions, ensure_ascii=False),
-            previous_hash=block.previous_hash,
-            hash=block.hash,
-            node_id=NODE_ID,
-            confirming_node_id=NODE_ID,
-            confirmed=True
-        )
-        db.session.add(block_db)
-        try:
+            calculated_hash = block.calculate_hash()
+            if calculated_hash != block_data['hash']:
+                current_app.logger.error(
+                    f"Invalid hash for block #{block_data['index']}: "
+                    f"calculated {calculated_hash}, expected {block_data['hash']}"
+                )
+                return jsonify({'error': 'Invalid block hash'}), 400
+
+            # Сохраняем блок в базе данных
+            new_block = BlockchainBlock(
+                index=block_data['index'],
+                timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
+                transactions=json.dumps(block_data['transactions'], ensure_ascii=False),
+                previous_hash=block_data['previous_hash'],
+                hash=block_data['hash'],
+                node_id=NODE_ID,
+                confirming_node_id=sender_id,
+                confirmed=False
+            )
+            db.session.add(new_block)
+
+            # Обрабатываем транзакции
+            transactions = block_data['transactions']
+            for tx in transactions:
+                tx_hash = tx.get('TransactionHash')
+                if not tx_hash:
+                    current_app.logger.warning(f"Skipping transaction without hash in block #{block_data['index']}")
+                    continue
+
+                # Проверяем существование записи
+                existing_record = ПриходРасход.query.filter_by(TransactionHash=tx_hash).first()
+                if existing_record:
+                    current_app.logger.info(f"PrihodRashod with hash {tx_hash} already exists")
+                    continue
+
+                # Проверяем обязательные поля транзакции
+                required_tx_fields = ['СкладОтправительID', 'СкладПолучательID', 'ДокументID', 
+                                    'ТоварID', 'Количество', 'Единица_ИзмеренияID', 'user_id', 'timestamp']
+                for field in required_tx_fields:
+                    if field not in tx:
+                        current_app.logger.error(f"Missing required field in transaction: {field}")
+                        continue
+
+                # Проверяем наличие склада и товара
+                склад_отправитель = Склады.query.get(tx['СкладОтправительID'])
+                склад_получатель = Склады.query.get(tx['СкладПолучательID'])
+                товар = Товары.query.get(tx['ТоварID'])
+                if not (склад_отправитель and склад_получатель and товар):
+                    current_app.logger.error("Invalid warehouse or item ID in transaction")
+                    continue
+
+                # Создаем новую запись ПриходРасход
+                new_record = ПриходРасход(
+                    СкладОтправительID=tx['СкладОтправительID'],
+                    СкладПолучательID=tx['СкладПолучательID'],
+                    ДокументID=tx['ДокументID'],
+                    ТоварID=tx['ТоварID'],
+                    Количество=tx['Количество'],
+                    Единица_ИзмеренияID=tx['Единица_ИзмеренияID'],
+                    TransactionHash=tx_hash,
+                    Timestamp=datetime.fromisoformat(tx['timestamp'].replace('Z', '+00:00')),
+                    user_id=tx['user_id']
+                )
+                db.session.add(new_record)
+
+                # Обновляем запасы
+                success, message = update_запасы(
+                    tx['СкладПолучательID'],
+                    tx['ТоварID'],
+                    tx['Количество']
+                )
+                if not success:
+                    current_app.logger.error(f"Failed to update receiver inventory: {message}")
+                    db.session.rollback()
+                    return jsonify({'error': message}), 400
+
+                if tx['СкладОтправительID'] != tx['СкладПолучательID']:
+                    success, message = update_запасы(
+                        tx['СкладОтправительID'],
+                        tx['ТоварID'],
+                        -tx['Количество']
+                    )
+                    if not success:
+                        current_app.logger.error(f"Failed to update sender inventory: {message}")
+                        db.session.rollback()
+                        return jsonify({'error': message}), 400
+
+            # Подтверждаем изменения в базе данных
             db.session.commit()
-            app.logger.info(f"Block #{block.index} accepted by node {NODE_ID}")
+            current_app.logger.info(f"Node {NODE_ID} received and saved block #{block_data['index']} with hash {block_data['hash']}")
+
             return jsonify({'status': 'Block accepted'}), 200
-        except sqlalchemy.exc.IntegrityError as e:
-            db.session.rollback()
-            app.logger.error(f"Error saving block: {e}")
-            return jsonify({'error': 'Database error'}), 500
+
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f"Error in receive_block: {str(e)}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
 
 
 async def broadcast_confirmation(block_index, creator_node_id, confirming_node_id):
