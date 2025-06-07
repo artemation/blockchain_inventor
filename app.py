@@ -280,7 +280,7 @@ class Node:
         self.start_leader_timeout()
 
         # Гарантированное создание генезис-блока при инициализации
-        #self._ensure_genesis_block()
+        self._ensure_genesis_block()
     
     def _ensure_genesis_block(self):
         genesis_block = BlockchainBlock.query.filter_by(index=0, node_id=self.node_id).first()
@@ -975,7 +975,12 @@ class Node:
                         hash=block_db.hash, node_id=self.node_id
                     ).first()
                     if not existing_block:
-                        db.session.add(transaction_record)
+                        # Проверяем, существует ли запись ПриходРасход
+                        existing_record = db.session.query(ПриходРасход).filter_by(
+                            TransactionHash=transaction_record.TransactionHash
+                        ).first()
+                        if not existing_record:
+                            db.session.add(transaction_record)
                         db.session.add(block_db)
                         current_app.logger.info(f"Block #{block.index} created and committed")
                     else:
