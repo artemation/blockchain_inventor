@@ -2857,6 +2857,29 @@ def debug_local_chain():
         current_app.logger.error(f"Error in debug_local_chain: {str(e)}")
         return jsonify({'success': False, 'message': f'Internal server error: {str(e)}'}), 500
 
+@app.route('/sync_blockchain', methods=['POST'])
+@csrf.exempt  # Отключаем CSRF для системного маршрута между узлами
+async def sync_blockchain_route():
+    """Запускает синхронизацию блокчейна для текущего узла"""
+    try:
+        node = nodes.get(NODE_ID)
+        if not node:
+            current_app.logger.error(f"Node {NODE_ID} not found")
+            return jsonify({'success': False, 'message': 'Node not found'}), 404
+        
+        current_app.logger.info(f"Node {NODE_ID} starting manual blockchain sync")
+        await node.sync_blockchain()
+        
+        with app.app_context():
+            height = db.session.query(func.max(BlockchainBlock.index)).filter_by(node_id=NODE_ID).scalar() or -1
+        current_app.logger.info(f"Node {NODE_ID} synced to height {height}")
+        
+        return jsonify({'success': True, 'message': f'Blockchain synced to height {height}'}), 200
+    
+    except Exception as e:
+        current_app.logger.error(f"Error syncing blockchain for node {NODE_ID}: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
+
 @app.context_processor
 def utility_processor():
     def get_warehouse_name(warehouse_id):
