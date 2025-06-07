@@ -1147,15 +1147,15 @@ class Node:
                 if not user_id:
                     return False, "User ID cannot be empty"
                 
+                # Нормализация timestamp
                 timestamp = transaction_data.get('timestamp')
                 if isinstance(timestamp, str):
                     try:
-                        datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                        normalized_timestamp = timestamp
+                        parsed_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                        normalized_timestamp = parsed_time.isoformat()
                     except ValueError:
+                        app.logger.error(f"Node {self.node_id}: Invalid timestamp format: {timestamp}")
                         normalized_timestamp = datetime.now(timezone.utc).isoformat()
-                elif hasattr(timestamp, 'isoformat'):
-                    normalized_timestamp = timestamp.isoformat()
                 else:
                     normalized_timestamp = datetime.now(timezone.utc).isoformat()
                 
@@ -1188,14 +1188,15 @@ class Node:
                 if not склад or not товар:
                     return False, "Invalid warehouse or item ID"
                 
-                # Проверяем наличие записи
-                existing_record = ПриходРасход.query.filter_by(
-                    TransactionHash=transaction_hash,
-                    СкладОтправительID=transaction_data['СкладОтправительID'],
-                    СкладПолучательID=transaction_data['СкладПолучательID'],
-                    ТоварID=transaction_data['ТоварID'],
-                    Количество=transaction_data['Количество'],
-                    Timestamp=datetime.fromisoformat(normalized_timestamp.replace('Z', '+00:00'))
+                # Проверяем наличие записи (используем строку для Timestamp)
+                existing_record = ПриходРасход.query.filter(
+                    ПриходРасход.TransactionHash == transaction_hash,
+                    ПриходРасход.СкладОтправительID == transaction_data['СкладОтправительID'],
+                    ПриходРасход.СкладПолучательID == transaction_data['СкладПолучательID'],
+                    ПриходРасход.ТоварID == transaction_data['ТоварID'],
+                    ПриходРасход.Количество == transaction_data['Количество'],
+                    # Приводим Timestamp к строке для сравнения
+                    db.func.to_char(ПриходРасход.Timestamp, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') == normalized_timestamp.replace('+00:00', 'Z')
                 ).first()
                 if existing_record:
                     app.logger.info(f"Node {self.node_id}: Transaction {transaction_hash} already exists")
@@ -1239,7 +1240,7 @@ class Node:
                 app.logger.info(f"Node {self.node_id}: Transaction {transaction_hash} applied to ПриходРасход")
                 
                 # Формируем блок
-                last_block = BlockchainBlock.query.filter_by(node_id=self.node_id).order_by(BlockchainBlock.index.desc()).first()
+                last_block = BlockchainBlock.query.filter_by(node_id=NODE_ID).order_by(BlockchainBlock.index.desc()).first()
                 new_index = last_block.index + 1 if last_block else 0
                 previous_hash = last_block.hash if last_block else "0"
                 
@@ -1256,8 +1257,8 @@ class Node:
                     transactions=json.dumps([transaction_data], ensure_ascii=False),
                     previous_hash=previous_hash,
                     hash=block.hash,
-                    node_id=self.node_id,
-                    confirming_node_id=self.node_id,
+                    node_id=NODE_ID,
+                    confirming_node_id=NODE_ID,
                     confirmed=False
                 )
                 
@@ -1279,24 +1280,25 @@ class Node:
                 tasks = []
                 for node_id, domain in self.nodes.items():
                     if node_id != self.node_id:
-                        url = f"https://{domain}/receive_prihod_rashod"
+                        url = f"http://{domain}/receive_prihod_rashod"  # Исправлено на HTTP, если нет HTTPS
                         tasks.append(self.send_post_request(node_id, url, record_data))
                 
                 responses = await asyncio.gather(*tasks, return_exceptions=True)
-                for node_id, response in responses:
+                for node_id, response in enumerate(responses, start=1):
                     if isinstance(response, Exception):
-                        app.logger.error(f"Node {self.node_id}: Failed to send PrihodRashod to node {node_id}: {response}")
+                        app.logger.error(f"Node {NODE_ID}: Failed to send PrihodRashod to node {node_id}: {response}")
                     else:
                         status, body = response
                         if status == 200:
-                            app.logger.info(f"Node {self.node_id}: PrihodRashod sent to node {node_id}")
+                            app.logger.info(f"Node {NODE_ID}: PrihodRashod sent successfully to node {node_id}")
                         else:
-                            app.logger.error(f"Node {self.node_id}: Error sending PrihodRashod to node {node_id}: {body}")
+                            app.logger.error(f"Node {NODE_ID}: Error sending PrihodRashod to node {node_id}: {body}")
                 
                 # Транслируем блок
                 confirmations, total_nodes = await self.broadcast_new_block(block, new_record, block_db)
                 if confirmations >= (2 * ((total_nodes - 1) // 3) + 1):
                     app.logger.info(f"Node {self.node_id}: Consensus reached for block #{new_index}")
+                    db.session.commit()
                     return True, "Transaction and block successfully applied"
                 else:
                     db.session.rollback()
@@ -1479,14 +1481,26 @@ async def receive_block():
                     app.logger.warning(f"Node {NODE_ID}: Skipping transaction without hash in block #{block_data['index']}")
                     continue
 
+                # Нормализуем timestamp транзакции
+                tx_timestamp = tx['timestamp']
+                if isinstance(tx_timestamp, str):
+                    try:
+                        parsed_time = datetime.fromisoformat(tx_timestamp.replace('Z', '+00:00'))
+                        normalized_tx_timestamp = parsed_time.isoformat()
+                    except ValueError:
+                        app.logger.error(f"Node {NODE_ID}: Invalid timestamp in transaction: {tx_timestamp}")
+                        continue
+                else:
+                    normalized_tx_timestamp = datetime.now(timezone.utc).isoformat()
+
                 # Проверяем, существует ли запись
-                existing_record = ПриходРасход.query.filter_by(
-                    TransactionHash=tx['hash'],
-                    СкладОтправительID=tx['СкладОтправительID'],
-                    СкладПолучательID=tx['СкладПолучательID'],
-                    ТоварID=tx['ТоварID'],
-                    Количество=tx['Количество'],
-                    Timestamp=datetime.fromisoformat(tx['timestamp'].replace('Z', '+00:00'))
+                existing_record = ПриходРасход.query.filter(
+                    ПриходРасход.TransactionHash == tx['hash'],
+                    ПриходРасход.СкладОтправительID == tx['СкладОтправительID'],
+                    ПриходРасход.СкладПолучательID == tx['СкладПолучательID'],
+                    ПриходРасход.ТоварID == tx['ТоварID'],
+                    ПриходРасход.Количество == tx['Количество'],
+                    db.func.to_char(ПриходРасход.Timestamp, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') == normalized_tx_timestamp.replace('+00:00', 'Z')
                 ).first()
                 if existing_record:
                     app.logger.info(f"Node {NODE_ID}: Transaction {tx['hash']} already exists in ПриходРасход")
@@ -1509,7 +1523,7 @@ async def receive_block():
                     Количество=tx['Количество'],
                     Единица_ИзмеренияID=tx['Единица_ИзмеренияID'],
                     TransactionHash=tx['hash'],
-                    Timestamp=datetime.fromisoformat(tx['timestamp'].replace('Z', '+00:00')),
+                    Timestamp=datetime.fromisoformat(normalized_tx_timestamp.replace('Z', '+00:00')),
                     user_id=tx['user_id']
                 )
                 db.session.add(new_record)
@@ -2852,6 +2866,394 @@ async def get_view_number():
     node_logger.debug(f"Node {NODE_ID} returning view_number: {node.view_number}")
     return jsonify({'view_number': node.view_number}), 200
 
+Ошибка, указанная в логах, связана с попыткой сравнения поля TransactionHash (тип character varying) с полем Timestamp (тип timestamp with time zone) в SQL-запросе в методе apply_transaction. Это происходит из-за несоответствия типов данных в условии WHERE при проверке существования записи в таблице ПриходРасход. Проблема возникает в строке:
+
+sql
+
+Свернуть
+
+Перенос
+
+Копировать
+WHERE "ПриходРасход"."TransactionHash" = %(TransactionHash_1)s AND ... AND "ПриходРасход"."Timestamp" = %(Timestamp_1)s
+Ошибка psycopg2.errors.UndefinedFunction: operator does not exist: character varying = timestamp with time zone указывает на то, что SQLAlchemy некорректно формирует запрос, пытаясь сравнить поле TransactionHash с временной меткой. Это может быть связано с неправильной передачей параметров или ошибкой в формировании запроса в методе apply_transaction.
+
+Основная проблема в вашем случае — в методе apply_transaction, где проверка на существование записи в ПриходРасход формирует некорректный запрос. Кроме того, проблема с синхронизацией записей в таблице ПриходРасход между узлами сохраняется, так как изменения в receive_block и receive_prihod_rashod не были применены корректно. Я исправлю код, учитывая ваш запрос не изменять модель ПриходРасход (поле TransactionHash остается без уникального ограничения и с текущим названием), и устраним ошибку с типами данных.
+
+Анализ ошибки
+Причина ошибки: В методе apply_transaction запрос на проверку существования записи в ПриходРасход включает сравнение Timestamp с параметром, но SQLAlchemy или PostgreSQL интерпретирует это некорректно из-за несоответствия типов или ошибки в передаче параметров. Лог показывает, что параметр Timestamp_1 передается как datetime объект, но PostgreSQL ожидает строку или другой формат.
+Сопутствующая проблема: Транзакции не содержат поле hash в блоках, что приводит к предупреждениям Skipping transaction without hash в receive_block.
+Синхронизация: Записи в ПриходРасход не добавляются на не-лидерских узлах из-за отсутствия логики в receive_block.
+План исправления
+Исправим метод apply_transaction, чтобы корректно обрабатывать Timestamp и избежать ошибки с типами.
+Обновим метод receive_block, чтобы он применял транзакции к ПриходРасход на всех узлах.
+Обновим метод receive_prihod_rashod, чтобы он соответствовал текущему названию поля TransactionHash и корректно обрабатывал Timestamp.
+Убедимся, что поле timestamp в транзакциях формируется в правильном формате ISO.
+1. Исправление метода apply_transaction
+Метод apply_transaction в app.py (примерно строки 1300-1400) формирует некорректный SQL-запрос из-за обработки Timestamp. Мы исправим проверку на существование записи и нормализацию timestamp. Замените метод на следующий код:
+
+python
+
+Свернуть
+
+Перенос
+
+Исполнить
+
+Копировать
+async def apply_transaction(self, sequence_number, digest):
+    app.logger.debug(f"Node {self.node_id}: Applying transaction {sequence_number} with digest {digest}")
+    
+    request = self.requests.get(sequence_number)
+    if not request:
+        app.logger.error(f"Node {self.node_id}: Request with sequence number {sequence_number} not found.")
+        return False, "Request with sequence number not found."
+    
+    try:
+        transaction_data = json.loads(request)
+        app.logger.debug(f"Node {self.node_id}: Transaction data to apply: {transaction_data}")
+        
+        with app.app_context():
+            required_fields = ['ДокументID', 'Единица_ИзмеренияID', 'Количество',
+                              'СкладОтправительID', 'СкладПолучательID', 'ТоварID', 'user_id']
+            for field in required_fields:
+                if field not in transaction_data:
+                    return False, f"Missing required field: {field}"
+            
+            user_id = transaction_data['user_id']
+            if not user_id:
+                return False, "User ID cannot be empty"
+            
+            # Нормализация timestamp
+            timestamp = transaction_data.get('timestamp')
+            if isinstance(timestamp, str):
+                try:
+                    parsed_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                    normalized_timestamp = parsed_time.isoformat()
+                except ValueError:
+                    app.logger.error(f"Node {self.node_id}: Invalid timestamp format: {timestamp}")
+                    normalized_timestamp = datetime.now(timezone.utc).isoformat()
+            else:
+                normalized_timestamp = datetime.now(timezone.utc).isoformat()
+            
+            transaction_for_hash = {
+                'ДокументID': int(transaction_data['ДокументID']),
+                'Единица_ИзмеренияID': int(transaction_data['Единица_ИзмеренияID']),
+                'Количество': float(transaction_data['Количество']),
+                'СкладОтправительID': int(transaction_data['СкладОтправительID']),
+                'СкладПолучательID': int(transaction_data['СкладПолучательID']),
+                'ТоварID': int(transaction_data['ТоварID']),
+                'user_id': int(user_id),
+                'timestamp': normalized_timestamp
+            }
+            
+            transaction_string = json.dumps(
+                transaction_for_hash,
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(',', ':')
+            )
+            transaction_hash = hashlib.sha256(transaction_string.encode('utf-8')).hexdigest()
+            app.logger.info(f"Node {self.node_id}: Transaction hash generated: {transaction_hash}")
+            
+            # Добавляем хэш в данные транзакции
+            transaction_data['hash'] = transaction_hash
+            
+            # Проверка наличия склада и товара
+            склад = Склады.query.get(transaction_data['СкладОтправительID'])
+            товар = Товары.query.get(transaction_data['ТоварID'])
+            if not склад or not товар:
+                return False, "Invalid warehouse or item ID"
+            
+            # Проверяем наличие записи (используем строку для Timestamp)
+            existing_record = ПриходРасход.query.filter(
+                ПриходРасход.TransactionHash == transaction_hash,
+                ПриходРасход.СкладОтправительID == transaction_data['СкладОтправительID'],
+                ПриходРасход.СкладПолучательID == transaction_data['СкладПолучательID'],
+                ПриходРасход.ТоварID == transaction_data['ТоварID'],
+                ПриходРасход.Количество == transaction_data['Количество'],
+                # Приводим Timestamp к строке для сравнения
+                db.func.to_char(ПриходРасход.Timestamp, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') == normalized_timestamp.replace('+00:00', 'Z')
+            ).first()
+            if existing_record:
+                app.logger.info(f"Node {self.node_id}: Transaction {transaction_hash} already exists")
+                return True, "Transaction already applied"
+            
+            # Создаем запись в ПриходРасход
+            new_record = ПриходРасход(
+                СкладОтправительID=transaction_data['СкладОтправительID'],
+                СкладПолучательID=transaction_data['СкладПолучательID'],
+                ДокументID=transaction_data['ДокументID'],
+                ТоварID=transaction_data['ТоварID'],
+                Количество=transaction_data['Количество'],
+                Единица_ИзмеренияID=transaction_data['Единица_ИзмеренияID'],
+                TransactionHash=transaction_hash,
+                Timestamp=datetime.fromisoformat(normalized_timestamp.replace('Z', '+00:00')),
+                user_id=user_id
+            )
+            db.session.add(new_record)
+            
+            # Обновляем запасы
+            success, message = update_запасы(
+                transaction_data['СкладПолучательID'],
+                transaction_data['ТоварID'],
+                transaction_data['Количество']
+            )
+            if not success:
+                db.session.rollback()
+                return False, message
+            
+            if transaction_data['СкладОтправительID'] != transaction_data['СкладПолучательID']:
+                success, message = update_запасы(
+                    transaction_data['СкладОтправительID'],
+                    transaction_data['ТоварID'],
+                    -transaction_data['Количество']
+                )
+                if not success:
+                    db.session.rollback()
+                    return False, message
+            
+            db.session.commit()
+            app.logger.info(f"Node {self.node_id}: Transaction {transaction_hash} applied to ПриходРасход")
+            
+            # Формируем блок
+            last_block = BlockchainBlock.query.filter_by(node_id=NODE_ID).order_by(BlockchainBlock.index.desc()).first()
+            new_index = last_block.index + 1 if last_block else 0
+            previous_hash = last_block.hash if last_block else "0"
+            
+            block = Block(
+                index=new_index,
+                timestamp=datetime.now(timezone.utc),
+                transactions=[transaction_data],
+                previous_hash=previous_hash
+            )
+            
+            block_db = BlockchainBlock(
+                index=new_index,
+                timestamp=block.timestamp,
+                transactions=json.dumps([transaction_data], ensure_ascii=False),
+                previous_hash=previous_hash,
+                hash=block.hash,
+                node_id=NODE_ID,
+                confirming_node_id=NODE_ID,
+                confirmed=False
+            )
+            
+            # Рассылаем запись ПриходРасход другим узлам
+            record_data = {
+                'record': {
+                    'СкладОтправительID': transaction_data['СкладОтправительID'],
+                    'СкладПолучательID': transaction_data['СкладПолучательID'],
+                    'ДокументID': transaction_data['ДокументID'],
+                    'ТоварID': transaction_data['ТоварID'],
+                    'Количество': transaction_data['Количество'],
+                    'Единица_ИзмеренияID': transaction_data['Единица_ИзмеренияID'],
+                    'TransactionHash': transaction_hash,
+                    'Timestamp': normalized_timestamp,
+                    'user_id': user_id
+                }
+            }
+            
+            tasks = []
+            for node_id, domain in self.nodes.items():
+                if node_id != self.node_id:
+                    url = f"http://{domain}/receive_prihod_rashod"  # Исправлено на HTTP, если нет HTTPS
+                    tasks.append(self.send_post_request(node_id, url, record_data))
+            
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            for node_id, response in enumerate(responses, start=1):
+                if isinstance(response, Exception):
+                    app.logger.error(f"Node {NODE_ID}: Failed to send PrihodRashod to node {node_id}: {response}")
+                else:
+                    status, body = response
+                    if status == 200:
+                        app.logger.info(f"Node {NODE_ID}: PrihodRashod sent successfully to node {node_id}")
+                    else:
+                        app.logger.error(f"Node {NODE_ID}: Error sending PrihodRashod to node {node_id}: {body}")
+            
+            # Транслируем блок
+            confirmations, total_nodes = await self.broadcast_new_block(block, new_record, block_db)
+            if confirmations >= (2 * ((total_nodes - 1) // 3) + 1):
+                app.logger.info(f"Node {self.node_id}: Consensus reached for block #{new_index}")
+                db.session.commit()
+                return True, "Transaction and block successfully applied"
+            else:
+                db.session.rollback()
+                return False, f"Consensus not reached: {confirmations}/{total_nodes}"
+    
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Node {self.node_id}: Error applying transaction {sequence_number}: {str(e)}")
+        return False, str(e)
+Что изменилось:
+
+Используется db.func.to_char для преобразования Timestamp в строку в формате ISO при сравнении, чтобы избежать ошибки с типами.
+Исправлена нормализация timestamp для консистентности.
+Добавлено поле hash в transaction_data.
+Исправлен URL в рассылке на http:// (предполагая, что ваши узлы используют HTTP; если используется HTTPS, верните https://).
+Проверка дублирования записи в ПриходРасход теперь учитывает строковое представление Timestamp.
+2. Исправление метода receive_block
+Метод receive_block не добавляет записи в ПриходРасход на не-лидерских узлах. Замените его на следующий код (примерно строки 1700-1800 в app.py):
+
+python
+
+Свернуть
+
+Перенос
+
+Исполнить
+
+Копировать
+@app.route('/receive_block', methods=['POST'])
+@csrf.exempt
+async def receive_block():
+    try:
+        data = request.get_json()
+        if not data or 'sender_id' not in data or 'block' not in data:
+            app.logger.error(f"Node {NODE_ID}: Invalid block data format")
+            return jsonify({'error': 'Invalid block data format'}), 400
+
+        block_data = data['block']
+        sender_id = data['sender_id']
+
+        # Проверяем обязательные поля блока
+        required_fields = ['index', 'timestamp', 'transactions', 'previous_hash', 'hash']
+        for field in required_fields:
+            if field not in block_data:
+                app.logger.error(f"Node {NODE_ID}: Missing field {field} in block")
+                return jsonify({'error': f'Missing field {field}'}), 400
+
+        with app.app_context():
+            # Проверяем, существует ли блок
+            existing_block = BlockchainBlock.query.filter_by(hash=block_data['hash'], node_id=NODE_ID).first()
+            if existing_block:
+                app.logger.info(f"Node {NODE_ID}: Block #{block_data['index']} with hash {block_data['hash']} already exists")
+                return jsonify({'status': 'Block already exists'}), 200
+
+            # Валидируем предыдущий хэш
+            previous_block = BlockchainBlock.query.filter_by(index=block_data['index'] - 1, node_id=NODE_ID).first()
+            expected_previous_hash = previous_block.hash if previous_block else "0"
+            if block_data['previous_hash'] != expected_previous_hash:
+                app.logger.error(f"Node {NODE_ID}: Invalid previous_hash for block #{block_data['index']}")
+                return jsonify({'error': 'Invalid previous_hash'}), 400
+
+            # Создаем запись блока
+            new_block = BlockchainBlock(
+                index=block_data['index'],
+                timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
+                transactions=json.dumps(block_data['transactions'], ensure_ascii=False),
+                previous_hash=block_data['previous_hash'],
+                hash=block_data['hash'],
+                node_id=NODE_ID,
+                confirming_node_id=sender_id,
+                confirmed=False
+            )
+            db.session.add(new_block)
+
+            # Применяем транзакции к ПриходРасход
+            transactions = block_data['transactions']
+            for tx in transactions:
+                if 'hash' not in tx:
+                    app.logger.warning(f"Node {NODE_ID}: Skipping transaction without hash in block #{block_data['index']}")
+                    continue
+
+                # Нормализуем timestamp транзакции
+                tx_timestamp = tx['timestamp']
+                if isinstance(tx_timestamp, str):
+                    try:
+                        parsed_time = datetime.fromisoformat(tx_timestamp.replace('Z', '+00:00'))
+                        normalized_tx_timestamp = parsed_time.isoformat()
+                    except ValueError:
+                        app.logger.error(f"Node {NODE_ID}: Invalid timestamp in transaction: {tx_timestamp}")
+                        continue
+                else:
+                    normalized_tx_timestamp = datetime.now(timezone.utc).isoformat()
+
+                # Проверяем, существует ли запись
+                existing_record = ПриходРасход.query.filter(
+                    ПриходРасход.TransactionHash == tx['hash'],
+                    ПриходРасход.СкладОтправительID == tx['СкладОтправительID'],
+                    ПриходРасход.СкладПолучательID == tx['СкладПолучательID'],
+                    ПриходРасход.ТоварID == tx['ТоварID'],
+                    ПриходРасход.Количество == tx['Количество'],
+                    db.func.to_char(ПриходРасход.Timestamp, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') == normalized_tx_timestamp.replace('+00:00', 'Z')
+                ).first()
+                if existing_record:
+                    app.logger.info(f"Node {NODE_ID}: Transaction {tx['hash']} already exists in ПриходРасход")
+                    continue
+
+                # Проверяем наличие склада и товара
+                склад_отправитель = Склады.query.get(tx['СкладОтправительID'])
+                склад_получатель = Склады.query.get(tx['СкладПолучательID'])
+                товар = Товары.query.get(tx['ТоварID'])
+                if not (склад_отправитель and склад_получатель and товар):
+                    app.logger.error(f"Node {NODE_ID}: Invalid warehouse or item ID in transaction {tx['hash']}")
+                    return jsonify({'error': 'Invalid warehouse or item ID'}), 400
+
+                # Создаем запись в ПриходРасход
+                new_record = ПриходРасход(
+                    СкладОтправительID=tx['СкладОтправительID'],
+                    СкладПолучательID=tx['СкладПолучательID'],
+                    ДокументID=tx['ДокументID'],
+                    ТоварID=tx['ТоварID'],
+                    Количество=tx['Количество'],
+                    Единица_ИзмеренияID=tx['Единица_ИзмеренияID'],
+                    TransactionHash=tx['hash'],
+                    Timestamp=datetime.fromisoformat(normalized_tx_timestamp.replace('Z', '+00:00')),
+                    user_id=tx['user_id']
+                )
+                db.session.add(new_record)
+
+                # Обновляем запасы
+                success, message = update_запасы(
+                    tx['СкладПолучательID'],
+                    tx['ТоварID'],
+                    tx['Количество']
+                )
+                if not success:
+                    db.session.rollback()
+                    app.logger.error(f"Node {NODE_ID}: Failed to update receiver inventory for tx {tx['hash']}: {message}")
+                    return jsonify({'error': message}), 400
+
+                if tx['СкладОтправительID'] != tx['СкладПолучательID']:
+                    success, message = update_запасы(
+                        tx['СкладОтправительID'],
+                        tx['ТоварID'],
+                        -tx['Количество']
+                    )
+                    if not success:
+                        db.session.rollback()
+                        app.logger.error(f"Node {NODE_ID}: Failed to update sender inventory for tx {tx['hash']}: {message}")
+                        return jsonify({'error': message}), 400
+
+            # Коммитим изменения
+            db.session.commit()
+            app.logger.info(f"Node {NODE_ID}: Block #{block_data['index']} with hash {block_data['hash']} accepted and transactions applied")
+
+            return jsonify({'status': 'Block accepted'}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Node {NODE_ID}: Error in receive_block: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+Что изменилось:
+
+Добавлена нормализация timestamp для транзакций.
+Проверка дублирования записи использует db.func.to_char для сравнения Timestamp.
+Логика применения транзакций к ПриходРасход теперь присутствует.
+Используется NODE_ID вместо self.node_id.
+3. Исправление метода receive_prihod_rashod
+Метод receive_prihod_rashod должен соответствовать текущему названию поля TransactionHash и корректно обрабатывать Timestamp. Замените его на следующий код:
+
+python
+
+Свернуть
+
+Перенос
+
+Исполнить
+
+Копировать
 @app.route('/receive_prihod_rashod', methods=['POST'])
 @csrf.exempt
 async def receive_prihod_rashod():
@@ -2869,15 +3271,27 @@ async def receive_prihod_rashod():
                 app.logger.error(f"Node {NODE_ID}: Missing required field: {field}")
                 return jsonify({'success': False, 'message': f'Missing required field: {field}'}), 400
     
+        # Нормализуем timestamp
+        timestamp = record_data['Timestamp']
+        if isinstance(timestamp, str):
+            try:
+                parsed_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                normalized_timestamp = parsed_time.isoformat()
+            except ValueError:
+                app.logger.error(f"Node {NODE_ID}: Invalid timestamp format: {timestamp}")
+                return jsonify({'success': False, 'message': 'Invalid timestamp format'}), 400
+        else:
+            normalized_timestamp = datetime.now(timezone.utc).isoformat()
+    
         with app.app_context():
-            # Проверяем, нет ли уже записи с таким хэшем и параметрами
-            existing_record = ПриходРасход.query.filter_by(
-                TransactionHash=record_data['TransactionHash'],
-                СкладОтправительID=record_data['СкладОтправительID'],
-                СкладПолучательID=record_data['СкладПолучательID'],
-                ТоварID=record_data['ТоварID'],
-                Количество=record_data['Количество'],
-                Timestamp=datetime.fromisoformat(record_data['Timestamp'].replace('Z', '+00:00'))
+            # Проверяем, нет ли уже записи
+            existing_record = ПриходРасход.query.filter(
+                ПриходРасход.TransactionHash == record_data['TransactionHash'],
+                ПриходРасход.СкладОтправительID == record_data['СкладОтправительID'],
+                ПриходРасход.СкладПолучательID == record_data['СкладПолучательID'],
+                ПриходРасход.ТоварID == record_data['ТоварID'],
+                ПриходРасход.Количество == record_data['Количество'],
+                db.func.to_char(ПриходРасход.Timestamp, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') == normalized_timestamp.replace('+00:00', 'Z')
             ).first()
             if existing_record:
                 app.logger.info(f"Node {NODE_ID}: PrihodRashod with hash {record_data['TransactionHash']} already exists")
@@ -2900,7 +3314,7 @@ async def receive_prihod_rashod():
                 Количество=record_data['Количество'],
                 Единица_ИзмеренияID=record_data['Единица_ИзмеренияID'],
                 TransactionHash=record_data['TransactionHash'],
-                Timestamp=datetime.fromisoformat(record_data['Timestamp'].replace('Z', '+00:00')),
+                Timestamp=datetime.fromisoformat(normalized_timestamp.replace('Z', '+00:00')),
                 user_id=record_data['user_id']
             )
     
