@@ -193,9 +193,11 @@ class Block:
         self.hash = self.calculate_hash()
 
     def calculate_hash(self):
+        if not isinstance(self.timestamp, datetime):
+            raise ValueError(f"Timestamp must be a datetime object, got {type(self.timestamp)}")
         block_data = {
             'index': self.index,
-            'timestamp': self.timestamp.isoformat() + ('+00:00' if not self.index.isoformat().endswith('+00:00') else ''),
+            'timestamp': self.timestamp.isoformat() + ('+00:00' if not self.timestamp.isoformat().endswith('+00:00') else ''),
             'transactions': self.transactions,
             'previous_hash': self.previous_hash
         }
