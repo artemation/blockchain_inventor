@@ -197,7 +197,7 @@ class Block:
             raise ValueError(f"Timestamp must be a datetime object, got {type(self.timestamp)}")
         block_data = {
             'index': self.index,
-            'timestamp': self.timestamp.isoformat() + ('+00:00' if not self.timestamp.isoformat().endswith('+00:00') else ''),
+            'timestamp': self.timestamp.isoformat(),  # Сохраняем как есть, без принудительного +00:00
             'transactions': self.transactions,
             'previous_hash': self.previous_hash
         }
@@ -783,9 +783,13 @@ class Node:
     
                     # Проверяем целостность блока
                     current_app.logger.debug(f"Raw block_data for block #{index}: {json.dumps(block_data, ensure_ascii=False)}")
+                    timestamp_str = block_data['timestamp']
+                    if not ('+00:00' in timestamp_str or 'Z' in timestamp_str) and index != 0:  # Не добавляем для генезис-блока
+                        timestamp_str += '+00:00'
+                    timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
                     block = Block(
                         index=block_data['index'],
-                        timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
+                        timestamp=timestamp,
                         transactions=block_data['transactions'],
                         previous_hash=block_data['previous_hash']
                     )
