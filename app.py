@@ -118,14 +118,13 @@ def get_block(block_index):
                 if not block:
                     return jsonify({'error': 'Block not found'}), 404
             
-            # Принудительно пересчитываем хэш
             block_obj = Block(
                 index=block.index,
                 timestamp=block.timestamp,
                 transactions=json.loads(block.transactions),
                 previous_hash=block.previous_hash
             )
-            calculated_hash = block_obj.calculate_hash()  # Это вызовет отладочные логи
+            calculated_hash = block_obj.calculate_hash()
             app.logger.debug(f"Node {NODE_ID}: Block #{block_index} fetched, calculated_hash={calculated_hash}, stored_hash={block.hash}")
 
             return jsonify({
@@ -133,7 +132,8 @@ def get_block(block_index):
                 'timestamp': block.timestamp.isoformat(),
                 'transactions': json.loads(block.transactions),
                 'previous_hash': block.previous_hash,
-                'hash': block.hash
+                'hash': block.hash,
+                'confirmations': block.confirmations  # Добавляем поле
             }), 200
     except Exception as e:
         app.logger.error(f"Node {NODE_ID}: Error in get_block for block #{block_index}: {str(e)}")
@@ -746,13 +746,12 @@ class Node:
     async def sync_blockchain(self):
         current_app.logger.info(f"Node {self.node_id} starting blockchain sync")
         headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
-    
+        
         with app.app_context():
             local_height = db.session.query(func.max(BlockchainBlock.index)).filter_by(node_id=self.node_id).scalar() or -1
         max_height = local_height
         source_nodes = []
-    
-        # Собираем информацию о высоте цепочки у всех узлов
+        
         for node_id, domain in self.nodes.items():
             if node_id == self.node_id:
                 continue
@@ -769,15 +768,13 @@ class Node:
                                 current_app.logger.info(f"Found chain at node {node_id} with height {remote_height}")
             except Exception as e:
                 current_app.logger.error(f"Error checking height from node {node_id}: {str(e)}")
-    
+        
         if not source_nodes:
             current_app.logger.info(f"Node {self.node_id} is up to date with height {local_height}")
             return
-    
-        # Сортируем узлы по высоте цепочки (от большей к меньшей)
+        
         source_nodes.sort(key=lambda x: x[2], reverse=True)
-    
-        # Пробуем синхронизироваться с каждым узлом по очереди
+        
         for source_node_id, domain, remote_height in source_nodes:
             current_app.logger.info(f"Node {self.node_id} attempting sync from node {source_node_id} with height {remote_height}")
             success = True
@@ -791,11 +788,10 @@ class Node:
                                 success = False
                                 break
                             block_data = await response.json()
-    
-                    # Проверяем целостность блока
+        
                     current_app.logger.debug(f"Raw block_data for block #{index}: {json.dumps(block_data, ensure_ascii=False)}")
                     timestamp_str = block_data['timestamp']
-                    if not ('+00:00' in timestamp_str or 'Z' in timestamp_str) and index != 0:  # Не добавляем для генезис-блока
+                    if not ('+00:00' in timestamp_str or 'Z' in timestamp_str) and index != 0:
                         timestamp_str += '+00:00'
                     timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
                     block = Block(
@@ -820,8 +816,7 @@ class Node:
                         )
                         success = False
                         break
-    
-                    # Проверяем previous_hash
+        
                     with app.app_context():
                         previous_block = db.session.query(BlockchainBlock).filter_by(index=index - 1, node_id=self.node_id).first()
                         expected_previous_hash = previous_block.hash if previous_block else "0"
@@ -831,20 +826,23 @@ class Node:
                             )
                             success = False
                             break
-    
-                    # Сохраняем блок
-                    with app.app_context():
+        
                         existing_block = db.session.query(BlockchainBlock).filter_by(index=index, node_id=self.node_id).first()
                         if not existing_block:
+                            # Сортируем ключи в transactions
+                            sorted_transactions = [
+                                {k: t[k] for k in sorted(t.keys())} for t in block_data['transactions']
+                            ]
                             new_block = BlockchainBlock(
                                 index=block_data['index'],
-                                timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
-                                transactions=json.dumps(block_data['transactions'], ensure_ascii=False),
+                                timestamp=timestamp,
+                                transactions=json.dumps(sorted_transactions, ensure_ascii=False),
                                 previous_hash=block_data['previous_hash'],
                                 hash=block_data['hash'],
                                 node_id=self.node_id,
                                 confirming_node_id=self.node_id,
-                                confirmed=True
+                                confirmed=True,
+                                confirmations=block_data.get('confirmations')  # Сохраняем confirmations
                             )
                             db.session.add(new_block)
                             db.session.commit()
@@ -856,11 +854,11 @@ class Node:
                     db.session.rollback()
                     success = False
                     break
-    
+        
             if success:
                 current_app.logger.info(f"Node {self.node_id} successfully synced to height {remote_height}")
                 return
-    
+        
         current_app.logger.warning(f"Node {self.node_id} failed to sync from any node")
     
     async def request_block_from_node(self, node_id, block_index):
