@@ -109,22 +109,34 @@ def get_blockchain_height():
 @app.route('/get_block/<int:block_index>')
 def get_block(block_index):
     try:
-        # Автоматически создаем генезис-блок при запросе, если его нет
-        if block_index == 0 and not BlockchainBlock.query.filter_by(index=0).first():
-            nodes[NODE_ID].create_genesis_block()
+        with app.app_context():
+            block = BlockchainBlock.query.filter_by(index=block_index, node_id=NODE_ID).first()
+            if not block:
+                if block_index == 0:
+                    nodes[NODE_ID]._ensure_genesis_block()
+                    block = BlockchainBlock.query.filter_by(index=0, node_id=NODE_ID).first()
+                if not block:
+                    return jsonify({'error': 'Block not found'}), 404
             
-        block = BlockchainBlock.query.filter_by(index=block_index).first()
-        if not block:
-            return jsonify({'error': 'Block not found'}), 404
-            
-        return jsonify({
-            'index': block.index,
-            'timestamp': block.timestamp.isoformat(),
-            'transactions': json.loads(block.transactions),
-            'previous_hash': block.previous_hash,
-            'hash': block.hash
-        })
+            # Принудительно пересчитываем хэш
+            block_obj = Block(
+                index=block.index,
+                timestamp=block.timestamp,
+                transactions=json.loads(block.transactions),
+                previous_hash=block.previous_hash
+            )
+            calculated_hash = block_obj.calculate_hash()  # Это вызовет отладочные логи
+            app.logger.debug(f"Node {NODE_ID}: Block #{block_index} fetched, calculated_hash={calculated_hash}, stored_hash={block.hash}")
+
+            return jsonify({
+                'index': block.index,
+                'timestamp': block.timestamp.isoformat(),
+                'transactions': json.loads(block.transactions),
+                'previous_hash': block.previous_hash,
+                'hash': block.hash
+            }), 200
     except Exception as e:
+        app.logger.error(f"Node {NODE_ID}: Error in get_block for block #{block_index}: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/admin', methods=['GET'])
