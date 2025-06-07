@@ -118,13 +118,14 @@ def get_block(block_index):
                 if not block:
                     return jsonify({'error': 'Block not found'}), 404
             
+            # Принудительно пересчитываем хэш
             block_obj = Block(
                 index=block.index,
                 timestamp=block.timestamp,
                 transactions=json.loads(block.transactions),
                 previous_hash=block.previous_hash
             )
-            calculated_hash = block_obj.calculate_hash()
+            calculated_hash = block_obj.calculate_hash()  # Это вызовет отладочные логи
             app.logger.debug(f"Node {NODE_ID}: Block #{block_index} fetched, calculated_hash={calculated_hash}, stored_hash={block.hash}")
 
             return jsonify({
@@ -132,8 +133,7 @@ def get_block(block_index):
                 'timestamp': block.timestamp.isoformat(),
                 'transactions': json.loads(block.transactions),
                 'previous_hash': block.previous_hash,
-                'hash': block.hash,
-                'confirmations': block.confirmations  # Добавляем поле
+                'hash': block.hash
             }), 200
     except Exception as e:
         app.logger.error(f"Node {NODE_ID}: Error in get_block for block #{block_index}: {str(e)}")
@@ -283,22 +283,34 @@ class Node:
         self._ensure_genesis_block()
     
     def _ensure_genesis_block(self):
-        genesis_block = BlockchainBlock.query.filter_by(index=0, node_id=self.node_id).first()
-        if not genesis_block:
-            blockchain_block = BlockchainBlock(
+        with app.app_context():
+            if BlockchainBlock.query.filter_by(index=0, node_id=self.node_id).first():
+                return
+            
+            genesis_data = {
+                'index': 0,
+                'timestamp': '2025-01-01T00:00:00+00:00',
+                'transactions': [{"message": "Genesis Block"}],
+                'previous_hash': "0"  # Без пробелов
+            }
+            
+            block_string = json.dumps(genesis_data, sort_keys=True, ensure_ascii=False).encode('utf-8')
+            genesis_hash = hashlib.sha256(block_string).hexdigest()
+            
+            genesis_block = BlockchainBlock(
                 index=0,
-                timestamp=datetime.datetime.fromisoformat("2025-01-01T00:00:00+00:00"),
-                transactions=["Genesis Block"],
-                previous_hash="0",
+                timestamp=datetime(2025, 1, 1, tzinfo=timezone.utc),
+                transactions=json.dumps(genesis_data['transactions'], ensure_ascii=False),
+                previous_hash="0",  # Без пробелов
+                hash=genesis_hash,
                 node_id=self.node_id,
+                confirming_node_id=self.node_id,
+                confirmed=True
             )
-            blockchain_block.hash = blockchain_block.compute_hash()
-            db.session.add(blockchain_block)
-            try:
-                db.session.commit()
-            except IntegrityError:
-                db.session.rollback()
-                app.logger.warning(f"Genesis block already exists for node {self.node_id}")
+            
+            db.session.add(genesis_block)
+            db.session.commit()
+            app.logger.info(f"Node {self.node_id}: Genesis block created with hash {genesis_hash}")
     
     def start_leader_timeout(self):
             async def periodic_check():
@@ -734,12 +746,13 @@ class Node:
     async def sync_blockchain(self):
         current_app.logger.info(f"Node {self.node_id} starting blockchain sync")
         headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
-        
+    
         with app.app_context():
             local_height = db.session.query(func.max(BlockchainBlock.index)).filter_by(node_id=self.node_id).scalar() or -1
         max_height = local_height
         source_nodes = []
-        
+    
+        # Собираем информацию о высоте цепочки у всех узлов
         for node_id, domain in self.nodes.items():
             if node_id == self.node_id:
                 continue
@@ -756,13 +769,15 @@ class Node:
                                 current_app.logger.info(f"Found chain at node {node_id} with height {remote_height}")
             except Exception as e:
                 current_app.logger.error(f"Error checking height from node {node_id}: {str(e)}")
-        
+    
         if not source_nodes:
             current_app.logger.info(f"Node {self.node_id} is up to date with height {local_height}")
             return
-        
+    
+        # Сортируем узлы по высоте цепочки (от большей к меньшей)
         source_nodes.sort(key=lambda x: x[2], reverse=True)
-        
+    
+        # Пробуем синхронизироваться с каждым узлом по очереди
         for source_node_id, domain, remote_height in source_nodes:
             current_app.logger.info(f"Node {self.node_id} attempting sync from node {source_node_id} with height {remote_height}")
             success = True
@@ -776,10 +791,11 @@ class Node:
                                 success = False
                                 break
                             block_data = await response.json()
-        
+    
+                    # Проверяем целостность блока
                     current_app.logger.debug(f"Raw block_data for block #{index}: {json.dumps(block_data, ensure_ascii=False)}")
                     timestamp_str = block_data['timestamp']
-                    if not ('+00:00' in timestamp_str or 'Z' in timestamp_str) and index != 0:
+                    if not ('+00:00' in timestamp_str or 'Z' in timestamp_str) and index != 0:  # Не добавляем для генезис-блока
                         timestamp_str += '+00:00'
                     timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
                     block = Block(
@@ -804,7 +820,8 @@ class Node:
                         )
                         success = False
                         break
-        
+    
+                    # Проверяем previous_hash
                     with app.app_context():
                         previous_block = db.session.query(BlockchainBlock).filter_by(index=index - 1, node_id=self.node_id).first()
                         expected_previous_hash = previous_block.hash if previous_block else "0"
@@ -814,23 +831,20 @@ class Node:
                             )
                             success = False
                             break
-        
+    
+                    # Сохраняем блок
+                    with app.app_context():
                         existing_block = db.session.query(BlockchainBlock).filter_by(index=index, node_id=self.node_id).first()
                         if not existing_block:
-                            # Сортируем ключи в transactions
-                            sorted_transactions = [
-                                {k: t[k] for k in sorted(t.keys())} for t in block_data['transactions']
-                            ]
                             new_block = BlockchainBlock(
                                 index=block_data['index'],
-                                timestamp=timestamp,
-                                transactions=json.dumps(sorted_transactions, ensure_ascii=False),
+                                timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
+                                transactions=json.dumps(block_data['transactions'], ensure_ascii=False),
                                 previous_hash=block_data['previous_hash'],
                                 hash=block_data['hash'],
                                 node_id=self.node_id,
                                 confirming_node_id=self.node_id,
-                                confirmed=True,
-                                confirmations=block_data.get('confirmations')  # Сохраняем confirmations
+                                confirmed=True
                             )
                             db.session.add(new_block)
                             db.session.commit()
@@ -842,11 +856,11 @@ class Node:
                     db.session.rollback()
                     success = False
                     break
-        
+    
             if success:
                 current_app.logger.info(f"Node {self.node_id} successfully synced to height {remote_height}")
                 return
-        
+    
         current_app.logger.warning(f"Node {self.node_id} failed to sync from any node")
     
     async def request_block_from_node(self, node_id, block_index):
@@ -975,12 +989,7 @@ class Node:
                         hash=block_db.hash, node_id=self.node_id
                     ).first()
                     if not existing_block:
-                        # Проверяем, существует ли запись ПриходРасход
-                        existing_record = db.session.query(ПриходРасход).filter_by(
-                            TransactionHash=transaction_record.TransactionHash
-                        ).first()
-                        if not existing_record:
-                            db.session.add(transaction_record)
+                        db.session.add(transaction_record)
                         db.session.add(block_db)
                         current_app.logger.info(f"Block #{block.index} created and committed")
                     else:
@@ -1130,188 +1139,129 @@ class Node:
         }
     
     async def apply_transaction(self, sequence_number, digest):
-        app.logger.debug(f"Node {self.node_id}: Applying transaction {sequence_number} with digest {digest}")
+        app.logger.debug(f"Applying transaction {sequence_number} with digest {digest}")
         
         request = self.requests.get(sequence_number)
         if not request:
-            app.logger.error(f"Node {self.node_id}: Request with sequence number {sequence_number} not found.")
+            app.logger.error(f"Request with sequence number {sequence_number} not found.")
             return False, "Request with sequence number not found."
         
         try:
             transaction_data = json.loads(request)
-            app.logger.debug(f"Node {self.node_id}: Transaction data to apply: {transaction_data}")
+            app.logger.debug(f"Transaction data to apply: {transaction_data}")
             
             with app.app_context():
-                required_fields = ['ДокументID', 'Единица_ИзмеренияID', 'Количество',
-                                  'СкладОтправительID', 'СкладПолучательID', 'ТоварID', 'user_id']
-                for field in required_fields:
-                    if field not in transaction_data:
-                        return False, f"Missing required field: {field}"
-                
-                user_id = transaction_data['user_id']
-                if not user_id:
-                    return False, "User ID cannot be empty"
-                
-                # Нормализация timestamp
-                timestamp = transaction_data.get('timestamp')
-                if isinstance(timestamp, str):
-                    try:
-                        parsed_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                        normalized_timestamp = parsed_time.isoformat()
-                    except ValueError:
-                        app.logger.error(f"Node {self.node_id}: Invalid timestamp format: {timestamp}")
-                        normalized_timestamp = datetime.now(timezone.utc).isoformat()
-                else:
-                    normalized_timestamp = datetime.now(timezone.utc).isoformat()
-                
-                transaction_for_hash = {
-                    'ДокументID': int(transaction_data['ДокументID']),
-                    'Единица_ИзмеренияID': int(transaction_data['Единица_ИзмеренияID']),
-                    'Количество': float(transaction_data['Количество']),
-                    'СкладОтправительID': int(transaction_data['СкладОтправительID']),
-                    'СкладПолучательID': int(transaction_data['СкладПолучательID']),
-                    'ТоварID': int(transaction_data['ТоварID']),
-                    'user_id': int(user_id),
-                    'timestamp': normalized_timestamp
-                }
-                
-                transaction_string = json.dumps(
-                    transaction_for_hash,
-                    sort_keys=True,
-                    ensure_ascii=False,
-                    separators=(',', ':')
-                )
-                transaction_hash = hashlib.sha256(transaction_string.encode('utf-8')).hexdigest()
-                app.logger.info(f"Node {self.node_id}: Transaction hash generated: {transaction_hash}")
-                
-                # Добавляем хэш в данные транзакции
-                transaction_data['hash'] = transaction_hash
-                
-                # Проверка наличия склада и товара
-                склад = Склады.query.get(transaction_data['СкладОтправительID'])
-                товар = Товары.query.get(transaction_data['ТоварID'])
-                if not склад or not товар:
-                    return False, "Invalid warehouse or item ID"
-                
-                # Проверяем наличие записи (используем строку для Timestamp)
-                existing_record = ПриходРасход.query.filter(
-                    ПриходРасход.TransactionHash == transaction_hash,
-                    ПриходРасход.СкладОтправительID == transaction_data['СкладОтправительID'],
-                    ПриходРасход.СкладПолучательID == transaction_data['СкладПолучательID'],
-                    ПриходРасход.ТоварID == transaction_data['ТоварID'],
-                    ПриходРасход.Количество == transaction_data['Количество'],
-                    # Приводим Timestamp к строке для сравнения
-                    db.func.to_char(ПриходРасход.Timestamp, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') == normalized_timestamp.replace('+00:00', 'Z')
-                ).first()
-                if existing_record:
-                    app.logger.info(f"Node {self.node_id}: Transaction {transaction_hash} already exists")
-                    return True, "Transaction already applied"
-                
-                # Создаем запись в ПриходРасход
-                new_record = ПриходРасход(
-                    СкладОтправительID=transaction_data['СкладОтправительID'],
-                    СкладПолучательID=transaction_data['СкладПолучательID'],
-                    ДокументID=transaction_data['ДокументID'],
-                    ТоварID=transaction_data['ТоварID'],
-                    Количество=transaction_data['Количество'],
-                    Единица_ИзмеренияID=transaction_data['Единица_ИзмеренияID'],
-                    TransactionHash=transaction_hash,
-                    Timestamp=datetime.fromisoformat(normalized_timestamp.replace('Z', '+00:00')),
-                    user_id=user_id
-                )
-                db.session.add(new_record)
-                
-                # Обновляем запасы
-                success, message = update_запасы(
-                    transaction_data['СкладПолучательID'],
-                    transaction_data['ТоварID'],
-                    transaction_data['Количество']
-                )
-                if not success:
-                    db.session.rollback()
-                    return False, message
-                
-                if transaction_data['СкладОтправительID'] != transaction_data['СкладПолучательID']:
-                    success, message = update_запасы(
-                        transaction_data['СкладОтправительID'],
-                        transaction_data['ТоварID'],
-                        -transaction_data['Количество']
-                    )
-                    if not success:
-                        db.session.rollback()
-                        return False, message
-                
-                db.session.commit()
-                app.logger.info(f"Node {self.node_id}: Transaction {transaction_hash} applied to ПриходРасход")
-                
-                # Формируем блок
-                last_block = BlockchainBlock.query.filter_by(node_id=NODE_ID).order_by(BlockchainBlock.index.desc()).first()
-                new_index = last_block.index + 1 if last_block else 0
-                previous_hash = last_block.hash if last_block else "0"
-                
-                block = Block(
-                    index=new_index,
-                    timestamp=datetime.now(timezone.utc),
-                    transactions=[transaction_data],
-                    previous_hash=previous_hash
-                )
-                
-                block_db = BlockchainBlock(
-                    index=new_index,
-                    timestamp=block.timestamp,
-                    transactions=json.dumps([transaction_data], ensure_ascii=False),
-                    previous_hash=previous_hash,
-                    hash=block.hash,
-                    node_id=NODE_ID,
-                    confirming_node_id=NODE_ID,
-                    confirmed=False
-                )
-                
-                # Рассылаем запись ПриходРасход другим узлам
-                record_data = {
-                    'record': {
-                        'СкладОтправительID': transaction_data['СкладОтправительID'],
-                        'СкладПолучательID': transaction_data['СкладПолучательID'],
-                        'ДокументID': transaction_data['ДокументID'],
-                        'ТоварID': transaction_data['ТоварID'],
-                        'Количество': transaction_data['Количество'],
-                        'Единица_ИзмеренияID': transaction_data['Единица_ИзмеренияID'],
-                        'TransactionHash': transaction_hash,
-                        'Timestamp': normalized_timestamp,
-                        'user_id': user_id
-                    }
-                }
-                
-                tasks = []
-                for node_id, domain in self.nodes.items():
-                    if node_id != self.node_id:
-                        url = f"http://{domain}/receive_prihod_rashod"  # Исправлено на HTTP, если нет HTTPS
-                        tasks.append(self.send_post_request(node_id, url, record_data))
-                
-                responses = await asyncio.gather(*tasks, return_exceptions=True)
-                for node_id, response in enumerate(responses, start=1):
-                    if isinstance(response, Exception):
-                        app.logger.error(f"Node {NODE_ID}: Failed to send PrihodRashod to node {node_id}: {response}")
+                try:
+                    required_fields = ['ДокументID', 'Единица_ИзмеренияID', 'Количество',
+                                       'СкладОтправительID', 'СкладПолучательID', 'ТоварID', 'user_id']
+                    for field in required_fields:
+                        if field not in transaction_data:
+                            return False, f"Missing required field: {field}"
+                    
+                    user_id = transaction_data['user_id']
+                    if not user_id:
+                        return False, "User ID cannot be empty"
+                    
+                    timestamp = transaction_data.get('timestamp')
+                    if isinstance(timestamp, str):
+                        try:
+                            datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                            normalized_timestamp = timestamp
+                        except ValueError:
+                            normalized_timestamp = datetime.now(timezone.utc).isoformat()
+                    elif hasattr(timestamp, 'isoformat'):
+                        normalized_timestamp = timestamp.isoformat()
                     else:
-                        status, body = response
-                        if status == 200:
-                            app.logger.info(f"Node {NODE_ID}: PrihodRashod sent successfully to node {node_id}")
-                        else:
-                            app.logger.error(f"Node {NODE_ID}: Error sending PrihodRashod to node {node_id}: {body}")
-                
-                # Транслируем блок
-                confirmations, total_nodes = await self.broadcast_new_block(block, new_record, block_db)
-                if confirmations >= (2 * ((total_nodes - 1) // 3) + 1):
-                    app.logger.info(f"Node {self.node_id}: Consensus reached for block #{new_index}")
-                    db.session.commit()
-                    return True, "Transaction and block successfully applied"
-                else:
+                        normalized_timestamp = datetime.now(timezone.utc).isoformat()
+                    
+                    transaction_for_hash = {
+                        'ДокументID': int(transaction_data['ДокументID']),
+                        'Единица_ИзмеренияID': int(transaction_data['Единица_ИзмеренияID']),
+                        'Количество': float(transaction_data['Количество']),
+                        'СкладОтправительID': int(transaction_data['СкладОтправительID']),
+                        'СкладПолучательID': int(transaction_data['СкладПолучательID']),
+                        'ТоварID': int(transaction_data['ТоварID']),
+                        'user_id': int(user_id),
+                        'timestamp': normalized_timestamp
+                    }
+                    
+                    transaction_string = json.dumps(
+                        transaction_for_hash,
+                        sort_keys=True,
+                        ensure_ascii=False,
+                        separators=(',', ':')
+                    )
+                    transaction_hash = hashlib.sha256(transaction_string.encode('utf-8')).hexdigest()
+                    app.logger.info(f"Transaction hash generated: {transaction_hash}")
+                    
+                    # Проверка наличия склада и товара
+                    склад = Склады.query.get(transaction_data['СкладОтправительID'])
+                    товар = Товары.query.get(transaction_data['ТоварID'])
+                    if not склад or not товар:
+                        return False, "Invalid warehouse or product"
+                    
+                    # Создание нового блока
+                    previous_block = db.session.query(BlockchainBlock).filter_by(node_id=self.node_id).order_by(BlockchainBlock.index.desc()).first()
+                    previous_hash = previous_block.hash if previous_block else "0"
+                    index = (previous_block.index + 1) if previous_block else 0
+                    
+                    new_block = Block(
+                        index=index,
+                        timestamp=datetime.now(timezone.utc),
+                        transactions=[transaction_for_hash],
+                        previous_hash=previous_hash
+                    )
+                    block_hash = new_block.calculate_hash()
+                    
+                    # Создание записи блока для базы данных
+                    block_db = BlockchainBlock(
+                        index=new_block.index,
+                        timestamp=new_block.timestamp,
+                        transactions=json.dumps(new_block.transactions, ensure_ascii=False),
+                        previous_hash=new_block.previous_hash,
+                        hash=block_hash,
+                        node_id=self.node_id,
+                        confirming_node_id=self.node_id,
+                        confirmed=False
+                    )
+                    
+                    # Создание записи ПриходРасход
+                    new_record = ПриходРасход(
+                        СкладОтправительID=transaction_data['СкладОтправительID'],
+                        СкладПолучательID=transaction_data['СкладПолучательID'],
+                        ДокументID=transaction_data['ДокументID'],
+                        ТоварID=transaction_data['ТоварID'],
+                        Количество=transaction_data['Количество'],
+                        Единица_ИзмеренияID=transaction_data['Единица_ИзмеренияID'],
+                        TransactionHash=transaction_hash,
+                        Timestamp=datetime.fromisoformat(normalized_timestamp.replace('Z', '+00:00')),
+                        user_id=user_id
+                    )
+                    
+                    # Рассылка блока и проверка консенсуса
+                    confirmations, total_nodes = await self.broadcast_new_block(new_block, new_record, block_db)
+                    
+                    # Проверка консенсуса по PBFT (2f+1)
+                    f = (total_nodes - 1) // 3
+                    required_confirmations = 2 * f + 1
+                    app.logger.info(f"Consensus check: {confirmations}/{required_confirmations} confirmations")
+                    
+                    if confirmations >= required_confirmations:
+                        app.logger.info(f"Consensus reached for block #{new_block.index}")
+                        return True, "Transaction applied successfully"
+                    else:
+                        app.logger.warning(f"Consensus not reached for block #{new_block.index}: {confirmations}/{required_confirmations}")
+                        db.session.rollback()
+                        self.rollback_unconfirmed_blocks()
+                        return False, f"Consensus not reached: {confirmations}/{required_confirmations} confirmations"
+                    
+                except Exception as e:
                     db.session.rollback()
-                    return False, f"Consensus not reached: {confirmations}/{total_nodes}"
-        
+                    app.logger.error(f"Error applying transaction: {e}")
+                    return False, str(e)
+                    
         except Exception as e:
-            db.session.rollback()
-            app.logger.error(f"Node {self.node_id}: Error applying transaction {sequence_number}: {str(e)}")
+            app.logger.error(f"Error in apply_transaction: {e}")
             return False, str(e)
         
     def generate_digest(self, message):
@@ -1436,135 +1386,86 @@ async def check_node_availability(self, node_id):
 @app.route('/receive_block', methods=['POST'])
 @csrf.exempt
 async def receive_block():
+    data = request.get_json()
+    app.logger.debug(f"Received block request: {data}")
+    sender_id = data.get('sender_id')
+    block_data = data.get('block')
+    
+    if sender_id is None or block_data is None:
+        app.logger.error(f"Invalid block data: sender_id={sender_id}, block_data={block_data}")
+        return jsonify({'error': 'Invalid block data'}), 400
+    
     try:
-        data = request.get_json()
-        if not data or 'sender_id' not in data or 'block' not in data:
-            app.logger.error(f"Node {NODE_ID}: Invalid block data format")
-            return jsonify({'error': 'Invalid block data format'}), 400
-
-        block_data = data['block']
-        sender_id = data['sender_id']
-
-        # Проверяем обязательные поля блока
-        required_fields = ['index', 'timestamp', 'transactions', 'previous_hash', 'hash']
-        for field in required_fields:
-            if field not in block_data:
-                app.logger.error(f"Node {NODE_ID}: Missing field {field} in block")
-                return jsonify({'error': f'Missing field {field}'}), 400
-
-        with app.app_context():
-            # Проверяем, существует ли блок
-            existing_block = BlockchainBlock.query.filter_by(hash=block_data['hash'], node_id=NODE_ID).first()
-            if existing_block:
-                app.logger.info(f"Node {NODE_ID}: Block #{block_data['index']} with hash {block_data['hash']} already exists")
-                return jsonify({'status': 'Block already exists'}), 200
-
-            # Валидируем предыдущий хэш
-            previous_block = BlockchainBlock.query.filter_by(index=block_data['index'] - 1, node_id=NODE_ID).first()
-            expected_previous_hash = previous_block.hash if previous_block else "0"
-            if block_data['previous_hash'] != expected_previous_hash:
-                app.logger.error(f"Node {NODE_ID}: Invalid previous_hash for block #{block_data['index']}")
-                return jsonify({'error': 'Invalid previous_hash'}), 400
-
-            # Создаем запись блока
-            new_block = BlockchainBlock(
+        sender_id = int(sender_id)
+    except (ValueError, TypeError):
+        app.logger.error(f"Invalid sender_id: {sender_id}")
+        return jsonify({'error': 'Invalid sender_id'}), 400
+    
+    node = nodes.get(NODE_ID)  # Get the current node
+    if not node:
+        app.logger.error(f"Current node {NODE_ID} not found")
+        return jsonify({'error': 'Node not found'}), 404
+    
+    with app.app_context():
+        # Check if block already exists
+        existing_block = db.session.query(BlockchainBlock).filter_by(
+            hash=block_data['hash'], node_id=NODE_ID).first()
+        if existing_block:
+            app.logger.info(f"Block #{block_data['index']} already exists for node {NODE_ID}")
+            return jsonify({'status': 'Block already exists'}), 200
+        
+        # Create block object
+        try:
+            block = Block(
                 index=block_data['index'],
                 timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
-                transactions=json.dumps(block_data['transactions'], ensure_ascii=False),
-                previous_hash=block_data['previous_hash'],
-                hash=block_data['hash'],
-                node_id=NODE_ID,
-                confirming_node_id=sender_id,
-                confirmed=False
+                transactions=block_data['transactions'],
+                previous_hash=block_data['previous_hash']
             )
-            db.session.add(new_block)
-
-            # Применяем транзакции к ПриходРасход
-            transactions = block_data['transactions']
-            for tx in transactions:
-                if 'hash' not in tx:
-                    app.logger.warning(f"Node {NODE_ID}: Skipping transaction without hash in block #{block_data['index']}")
-                    continue
-
-                # Нормализуем timestamp транзакции
-                tx_timestamp = tx['timestamp']
-                if isinstance(tx_timestamp, str):
-                    try:
-                        parsed_time = datetime.fromisoformat(tx_timestamp.replace('Z', '+00:00'))
-                        normalized_tx_timestamp = parsed_time.isoformat()
-                    except ValueError:
-                        app.logger.error(f"Node {NODE_ID}: Invalid timestamp in transaction: {tx_timestamp}")
-                        continue
-                else:
-                    normalized_tx_timestamp = datetime.now(timezone.utc).isoformat()
-
-                # Проверяем, существует ли запись
-                existing_record = ПриходРасход.query.filter(
-                    ПриходРасход.TransactionHash == tx['hash'],
-                    ПриходРасход.СкладОтправительID == tx['СкладОтправительID'],
-                    ПриходРасход.СкладПолучательID == tx['СкладПолучательID'],
-                    ПриходРасход.ТоварID == tx['ТоварID'],
-                    ПриходРасход.Количество == tx['Количество'],
-                    db.func.to_char(ПриходРасход.Timestamp, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') == normalized_tx_timestamp.replace('+00:00', 'Z')
-                ).first()
-                if existing_record:
-                    app.logger.info(f"Node {NODE_ID}: Transaction {tx['hash']} already exists in ПриходРасход")
-                    continue
-
-                # Проверяем наличие склада и товара
-                склад_отправитель = Склады.query.get(tx['СкладОтправительID'])
-                склад_получатель = Склады.query.get(tx['СкладПолучательID'])
-                товар = Товары.query.get(tx['ТоварID'])
-                if not (склад_отправитель and склад_получатель and товар):
-                    app.logger.error(f"Node {NODE_ID}: Invalid warehouse or item ID in transaction {tx['hash']}")
-                    return jsonify({'error': 'Invalid warehouse or item ID'}), 400
-
-                # Создаем запись в ПриходРасход
-                new_record = ПриходРасход(
-                    СкладОтправительID=tx['СкладОтправительID'],
-                    СкладПолучательID=tx['СкладПолучательID'],
-                    ДокументID=tx['ДокументID'],
-                    ТоварID=tx['ТоварID'],
-                    Количество=tx['Количество'],
-                    Единица_ИзмеренияID=tx['Единица_ИзмеренияID'],
-                    TransactionHash=tx['hash'],
-                    Timestamp=datetime.fromisoformat(normalized_tx_timestamp.replace('Z', '+00:00')),
-                    user_id=tx['user_id']
-                )
-                db.session.add(new_record)
-
-                # Обновляем запасы
-                success, message = update_запасы(
-                    tx['СкладПолучательID'],
-                    tx['ТоварID'],
-                    tx['Количество']
-                )
-                if not success:
-                    db.session.rollback()
-                    app.logger.error(f"Node {NODE_ID}: Failed to update receiver inventory for tx {tx['hash']}: {message}")
-                    return jsonify({'error': message}), 400
-
-                if tx['СкладОтправительID'] != tx['СкладПолучательID']:
-                    success, message = update_запасы(
-                        tx['СкладОтправительID'],
-                        tx['ТоварID'],
-                        -tx['Количество']
-                    )
-                    if not success:
-                        db.session.rollback()
-                        app.logger.error(f"Node {NODE_ID}: Failed to update sender inventory for tx {tx['hash']}: {message}")
-                        return jsonify({'error': message}), 400
-
-            # Коммитим изменения
+            block.hash = block_data['hash']
+        except Exception as e:
+            app.logger.error(f"Failed to create block object: {e}")
+            return jsonify({'error': 'Invalid block format'}), 400
+        
+        # Validate block
+        last_block = db.session.query(BlockchainBlock).filter_by(node_id=NODE_ID).order_by(BlockchainBlock.index.desc()).first()
+        if last_block:
+            if block.previous_hash != last_block.hash.strip():  # Ensure no spaces affect comparison
+                app.logger.error(f"Invalid previous_hash: expected {last_block.hash}, got {block.previous_hash}")
+                return jsonify({'error': 'Invalid block: previous_hash mismatch'}), 400
+            if block.index != last_block.index + 1:
+                app.logger.error(f"Invalid index: expected {last_block.index + 1}, got {block.index}")
+                return jsonify({'error': 'Invalid block: index mismatch'}), 400
+        else:
+            if block.index != 0:
+                app.logger.error(f"Expected genesis block, got index {block.index}")
+                return jsonify({'error': 'Invalid block: expected genesis block'}), 400
+        
+        calculated_hash = block.calculate_hash()
+        if calculated_hash != block.hash:
+            app.logger.error(f"Hash mismatch: calculated {calculated_hash}, got {block.hash}")
+            return jsonify({'error': 'Invalid block: hash mismatch'}), 400
+        
+        # Save the block if valid
+        block_db = BlockchainBlock(
+            index=block.index,
+            timestamp=block.timestamp,
+            transactions=json.dumps(block.transactions, ensure_ascii=False),
+            previous_hash=block.previous_hash,
+            hash=block.hash,
+            node_id=NODE_ID,
+            confirming_node_id=NODE_ID,
+            confirmed=True
+        )
+        db.session.add(block_db)
+        try:
             db.session.commit()
-            app.logger.info(f"Node {NODE_ID}: Block #{block_data['index']} with hash {block_data['hash']} accepted and transactions applied")
-
+            app.logger.info(f"Block #{block.index} accepted by node {NODE_ID}")
             return jsonify({'status': 'Block accepted'}), 200
-
-    except Exception as e:
-        db.session.rollback()
-        app.logger.error(f"Node {NODE_ID}: Error in receive_block: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        except sqlalchemy.exc.IntegrityError as e:
+            db.session.rollback()
+            app.logger.error(f"Error saving block: {e}")
+            return jsonify({'error': 'Database error'}), 500
 
 
 async def broadcast_confirmation(block_index, creator_node_id, confirming_node_id):
@@ -2072,7 +1973,7 @@ async def index():
                     'ТоварID': form.ТоварID.data,
                     'Количество': form.Количество.data,
                     'Единица_ИзмеренияID': form.Единица_ИзмеренияID.data,
-                    'timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+                    'timestamp': datetime.now(timezone.utc).isoformat()
                 }
 
                 current_app.logger.debug(f"Сформированы данные транзакции: {transaction_data}")
@@ -2874,10 +2775,11 @@ async def get_view_number():
 @app.route('/receive_prihod_rashod', methods=['POST'])
 @csrf.exempt
 async def receive_prihod_rashod():
+    """Обрабатывает получение записи ПриходРасход от лидера."""
     try:
         data = request.get_json()
         if not data or 'record' not in data:
-            app.logger.error(f"Node {NODE_ID}: Invalid PrihodRashod data format")
+            app.logger.error("Invalid PrihodRashod data format")
             return jsonify({'success': False, 'message': 'Invalid data format'}), 400
     
         record_data = data['record']
@@ -2885,33 +2787,14 @@ async def receive_prihod_rashod():
                           'Количество', 'Единица_ИзмеренияID', 'TransactionHash', 'Timestamp', 'user_id']
         for field in required_fields:
             if field not in record_data:
-                app.logger.error(f"Node {NODE_ID}: Missing required field: {field}")
+                app.logger.error(f"Missing required field: {field}")
                 return jsonify({'success': False, 'message': f'Missing required field: {field}'}), 400
     
-        # Нормализуем timestamp
-        timestamp = record_data['Timestamp']
-        if isinstance(timestamp, str):
-            try:
-                parsed_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-                normalized_timestamp = parsed_time.isoformat()
-            except ValueError:
-                app.logger.error(f"Node {NODE_ID}: Invalid timestamp format: {timestamp}")
-                return jsonify({'success': False, 'message': 'Invalid timestamp format'}), 400
-        else:
-            normalized_timestamp = datetime.now(timezone.utc).isoformat()
-    
         with app.app_context():
-            # Проверяем, нет ли уже записи
-            existing_record = ПриходРасход.query.filter(
-                ПриходРасход.TransactionHash == record_data['TransactionHash'],
-                ПриходРасход.СкладОтправительID == record_data['СкладОтправительID'],
-                ПриходРасход.СкладПолучательID == record_data['СкладПолучательID'],
-                ПриходРасход.ТоварID == record_data['ТоварID'],
-                ПриходРасход.Количество == record_data['Количество'],
-                db.func.to_char(ПриходРасход.Timestamp, 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') == normalized_timestamp.replace('+00:00', 'Z')
-            ).first()
+            # Проверяем, нет ли уже записи с таким хешем
+            existing_record = ПриходРасход.query.filter_by(TransactionHash=record_data['TransactionHash']).first()
             if existing_record:
-                app.logger.info(f"Node {NODE_ID}: PrihodRashod with hash {record_data['TransactionHash']} already exists")
+                app.logger.info(f"PrihodRashod with hash {record_data['TransactionHash']} already exists")
                 return jsonify({'success': True, 'message': 'Record already exists'}), 200
     
             # Проверяем наличие склада и товара
@@ -2919,7 +2802,7 @@ async def receive_prihod_rashod():
             склад_получатель = Склады.query.get(record_data['СкладПолучательID'])
             товар = Товары.query.get(record_data['ТоварID'])
             if not (склад_отправитель and склад_получатель and товар):
-                app.logger.error(f"Node {NODE_ID}: Invalid warehouse or item ID")
+                app.logger.error("Invalid warehouse or item ID")
                 return jsonify({'success': False, 'message': 'Invalid warehouse or item ID'}), 400
     
             # Создаем новую запись
@@ -2931,7 +2814,7 @@ async def receive_prihod_rashod():
                 Количество=record_data['Количество'],
                 Единица_ИзмеренияID=record_data['Единица_ИзмеренияID'],
                 TransactionHash=record_data['TransactionHash'],
-                Timestamp=datetime.fromisoformat(normalized_timestamp.replace('Z', '+00:00')),
+                Timestamp=datetime.fromisoformat(record_data['Timestamp'].replace('Z', '+00:00')),
                 user_id=record_data['user_id']
             )
     
@@ -2942,7 +2825,7 @@ async def receive_prihod_rashod():
                 record_data['Количество']
             )
             if not success:
-                app.logger.error(f"Node {NODE_ID}: Failed to update receiver inventory: {message}")
+                app.logger.error(f"Failed to update receiver inventory: {message}")
                 return jsonify({'success': False, 'message': message}), 400
     
             if record_data['СкладОтправительID'] != record_data['СкладПолучательID']:
@@ -2952,17 +2835,17 @@ async def receive_prihod_rashod():
                     -record_data['Количество']
                 )
                 if not success:
-                    app.logger.error(f"Node {NODE_ID}: Failed to update sender inventory: {message}")
+                    app.logger.error(f"Failed to update sender inventory: {message}")
                     return jsonify({'success': False, 'message': message}), 400
     
             db.session.add(new_record)
             db.session.commit()
-            app.logger.info(f"Node {NODE_ID}: PrihodRashod record added with hash {record_data['TransactionHash']}")
+            app.logger.info(f"PrihodRashod record added with hash {record_data['TransactionHash']}")
             return jsonify({'success': True, 'message': 'Record added successfully'}), 200
     
     except Exception as e:
         db.session.rollback()
-        app.logger.error(f"Node {NODE_ID}: Error in receive_prihod_rashod: {str(e)}")
+        app.logger.error(f"Error in receive_prihod_rashod: {str(e)}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
 # Новый маршрут для обработки запросов лидером
@@ -3096,59 +2979,35 @@ atexit.register(cleanup)
 
 if __name__ == '__main__':
     with app.app_context():
-        # Инициализация узлов
-        nodes = {}
-        for i in range(4):  # Пример для 4 узлов
-            nodes[i] = Node(
-                node_id=i,
-                nodes=NODE_DOMAINS,
-                host=NODE_DOMAINS[i].split(':')[0] if ':' in NODE_DOMAINS[i] else NODE_DOMAINS[i],
-                port=NODE_DOMAINS[i].split(':')[1] if ':' in NODE_DOMAINS[i] else '443'
-            )
-        current_node = nodes[NODE_ID]
-
         # Жёсткая гарантия создания генезис-блока
-        try:
-            # 1. Проверяем наличие генезис-блока
-            genesis_block = BlockchainBlock.query.filter_by(index=0, node_id=NODE_ID).first()
-            if not genesis_block:
-                # 2. Создаём генезис-блок
-                genesis_block = current_node.create_genesis_block()
-                app.logger.info(f"Node {NODE_ID}: Genesis block created with hash {genesis_block.hash}")
-
-                # 3. Сохраняем в БД
-                genesis_db = BlockchainBlock(
-                    index=0,
-                    timestamp=genesis_block.timestamp,
-                    transactions=json.dumps(genesis_block.transactions),
-                    previous_hash=genesis_block.previous_hash,
-                    hash=genesis_block.hash,
-                    node_id=NODE_ID,
-                    confirming_node_id=NODE_ID,
-                    confirmed=True
-                )
-                db.session.add(genesis_db)
-                try:
-                    db.session.commit()
-                    app.logger.info(f"Node {NODE_ID}: Genesis block committed to DB")
-                except sqlalchemy.exc.IntegrityError:
-                    db.session.rollback()
-                    app.logger.warning(f"Node {NODE_ID}: Genesis block already exists in DB")
-            else:
-                app.logger.info(f"Node {NODE_ID}: Genesis block already exists")
-
-        except Exception as e:
-            app.logger.error(f"Error creating genesis block for Node {NODE_ID}: {e}")
-            raise
-
-        # 4. Запускаем синхронизацию
+        current_node = nodes[NODE_ID]
+        
+        # 1. Создаем генезис-блок (пересоздаем, если уже существует)
+        genesis_block = current_node.create_genesis_block()
+        app.logger.info(f"Node {NODE_ID}: Genesis block created with hash {genesis_block.hash}")
+        
+        # 2. Принудительно сохраняем в БД, если не сохранилось
+        if not BlockchainBlock.query.filter_by(index=0).first():
+            genesis_db = BlockchainBlock(
+                index=0,
+                timestamp=genesis_block.timestamp,
+                transactions=json.dumps(genesis_block.transactions),
+                previous_hash=genesis_block.previous_hash,
+                hash=genesis_block.hash,
+                node_id=NODE_ID,
+                confirming_node_id=NODE_ID,
+                confirmed=True
+            )
+            db.session.add(genesis_db)
+            db.session.commit()
+            app.logger.warning(f"Node {NODE_ID}: Genesis block forced to DB")
+        
+        # 3. Запускаем синхронизацию
         try:
             loop = asyncio.get_event_loop()
             loop.run_until_complete(current_node.sync_blockchain())
             app.logger.info(f"Node {NODE_ID} ready")
         except Exception as e:
-            app.logger.error(f"Sync error for Node {NODE_ID}: {e}")
-            raise
-
-    # Запускаем приложение
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+            app.logger.error(f"Sync error: {e}")
+        
+        app.run(host='0.0.0.0', port=PORT)
