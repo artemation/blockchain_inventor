@@ -280,7 +280,7 @@ class Node:
         self.start_leader_timeout()
 
         # Гарантированное создание генезис-блока при инициализации
-        self._ensure_genesis_block()
+        #self._ensure_genesis_block()
     
     def _ensure_genesis_block(self):
         genesis_block = BlockchainBlock.query.filter_by(index=0, node_id=self.node_id).first()
@@ -3027,35 +3027,42 @@ atexit.register(cleanup)
 
 if __name__ == '__main__':
     with app.app_context():
-        # Жёсткая гарантия создания генезис-блока
+        # Инициализация узлов
+        nodes = {i: Node(node_id=i) for i in range(4)}  # Пример для 4 узлов, замените на нужное количество
         current_node = nodes[NODE_ID]
-        
-        # 1. Создаем генезис-блок (пересоздаем, если уже существует)
-        genesis_block = current_node.create_genesis_block()
-        app.logger.info(f"Node {NODE_ID}: Genesis block created with hash {genesis_block.hash}")
-        
-        # 2. Принудительно сохраняем в БД, если не сохранилось
-        if not BlockchainBlock.query.filter_by(index=0).first():
-            genesis_db = BlockchainBlock(
-                index=0,
-                timestamp=genesis_block.timestamp,
-                transactions=json.dumps(genesis_block.transactions),
-                previous_hash=genesis_block.previous_hash,
-                hash=genesis_block.hash,
-                node_id=NODE_ID,
-                confirming_node_id=NODE_ID,
-                confirmed=True
-            )
-            db.session.add(genesis_db)
-            db.session.commit()
-            app.logger.warning(f"Node {NODE_ID}: Genesis block forced to DB")
-        
+
+        # Жёсткая гарантия создания генезис-блока
+        try:
+            # 1. Создаем генезис-блок
+            genesis_block = current_node.create_genesis_block()
+            app.logger.info(f"Node {NODE_ID}: Genesis block created with hash {genesis_block.hash}")
+
+            # 2. Принудительно сохраняем в БД, если не сохранилось
+            if not BlockchainBlock.query.filter_by(index=0, node_id=NODE_ID).first():
+                genesis_db = BlockchainBlock(
+                    index=0,
+                    timestamp=genesis_block.timestamp,
+                    transactions=json.dumps(genesis_block.transactions),
+                    previous_hash=genesis_block.previous_hash,
+                    hash=genesis_block.hash,
+                    node_id=NODE_ID,
+                    confirming_node_id=NODE_ID,
+                    confirmed=True
+                )
+                db.session.add(genesis_db)
+                try:
+                    db.session.commit()
+                    app.logger.warning(f"Node {NODE_ID}: Genesis block forced to DB")
+                except IntegrityError:
+                    db.session.rollback()
+                    app.logger.warning(f"Node {NODE_ID}: Genesis block already exists in DB")
+        except Exception as e:
+            app.logger.error(f"Error creating genesis block for Node {NODE_ID}: {e}")
+
         # 3. Запускаем синхронизацию
         try:
             loop = asyncio.get_event_loop()
             loop.run_until_complete(current_node.sync_blockchain())
             app.logger.info(f"Node {NODE_ID} ready")
         except Exception as e:
-            app.logger.error(f"Sync error: {e}")
-        
-        app.run(host='0.0.0.0', port=PORT)
+            app.logger.error(f"Sync error for Node {NODE_ID}: {e}")
