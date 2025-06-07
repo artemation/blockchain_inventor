@@ -3097,17 +3097,26 @@ atexit.register(cleanup)
 if __name__ == '__main__':
     with app.app_context():
         # Инициализация узлов
-        nodes = {i: Node(node_id=i) for i in range(4)}  # Пример для 4 узлов, замените на нужное количество
+        nodes = {}
+        for i in range(4):  # Пример для 4 узлов
+            nodes[i] = Node(
+                node_id=i,
+                nodes=NODE_DOMAINS,
+                host=NODE_DOMAINS[i].split(':')[0] if ':' in NODE_DOMAINS[i] else NODE_DOMAINS[i],
+                port=NODE_DOMAINS[i].split(':')[1] if ':' in NODE_DOMAINS[i] else '443'
+            )
         current_node = nodes[NODE_ID]
 
         # Жёсткая гарантия создания генезис-блока
         try:
-            # 1. Создаем генезис-блок
-            genesis_block = current_node.create_genesis_block()
-            app.logger.info(f"Node {NODE_ID}: Genesis block created with hash {genesis_block.hash}")
+            # 1. Проверяем наличие генезис-блока
+            genesis_block = BlockchainBlock.query.filter_by(index=0, node_id=NODE_ID).first()
+            if not genesis_block:
+                # 2. Создаём генезис-блок
+                genesis_block = current_node.create_genesis_block()
+                app.logger.info(f"Node {NODE_ID}: Genesis block created with hash {genesis_block.hash}")
 
-            # 2. Принудительно сохраняем в БД, если не сохранилось
-            if not BlockchainBlock.query.filter_by(index=0, node_id=NODE_ID).first():
+                # 3. Сохраняем в БД
                 genesis_db = BlockchainBlock(
                     index=0,
                     timestamp=genesis_block.timestamp,
@@ -3121,17 +3130,25 @@ if __name__ == '__main__':
                 db.session.add(genesis_db)
                 try:
                     db.session.commit()
-                    app.logger.warning(f"Node {NODE_ID}: Genesis block forced to DB")
-                except IntegrityError:
+                    app.logger.info(f"Node {NODE_ID}: Genesis block committed to DB")
+                except sqlalchemy.exc.IntegrityError:
                     db.session.rollback()
                     app.logger.warning(f"Node {NODE_ID}: Genesis block already exists in DB")
+            else:
+                app.logger.info(f"Node {NODE_ID}: Genesis block already exists")
+
         except Exception as e:
             app.logger.error(f"Error creating genesis block for Node {NODE_ID}: {e}")
+            raise
 
-        # 3. Запускаем синхронизацию
+        # 4. Запускаем синхронизацию
         try:
             loop = asyncio.get_event_loop()
             loop.run_until_complete(current_node.sync_blockchain())
             app.logger.info(f"Node {NODE_ID} ready")
         except Exception as e:
             app.logger.error(f"Sync error for Node {NODE_ID}: {e}")
+            raise
+
+    # Запускаем приложение
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
