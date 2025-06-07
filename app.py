@@ -2053,7 +2053,7 @@ async def index():
                     'ТоварID': form.ТоварID.data,
                     'Количество': form.Количество.data,
                     'Единица_ИзмеренияID': form.Единица_ИзмеренияID.data,
-                    timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+                    'timestamp': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
                 }
 
                 current_app.logger.debug(f"Сформированы данные транзакции: {transaction_data}")
