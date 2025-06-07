@@ -2843,7 +2843,7 @@ async def handle_leader_request():
         return jsonify({'success': False, 'message': message}), 400
 
 @app.route('/debug_local_chain', methods=['GET'])
-@login_required
+
 def debug_local_chain():
     if not current_user.is_admin:
         return jsonify({'success': False, 'message': 'Access denied'}), 403
