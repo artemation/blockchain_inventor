@@ -195,7 +195,7 @@ class Block:
     def calculate_hash(self):
         block_data = {
             'index': self.index,
-            'timestamp': self.timestamp.isoformat() + ('+00:00' if not self.index.isoformat().endswith('+00:00') else '',
+            'timestamp': self.timestamp.isoformat() + ('+00:00' if not self.index.isoformat().endswith('+00:00') else ''),
             'transactions': self.transactions,
             'previous_hash': self.previous_hash
         }
