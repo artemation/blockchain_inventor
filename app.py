@@ -780,8 +780,20 @@ class Node:
                         transactions=block_data['transactions'],
                         previous_hash=block_data['previous_hash']
                     )
-                    if block.calculate_hash() != block_data['hash']:
-                        current_app.logger.error(f"Invalid hash for block #{index} from node {source_node_id}")
+                    calculated_hash = block.calculate_hash()
+                    block_string = (
+                        f"{block.index}{block.timestamp.isoformat()}{json.dumps(block.transactions, sort_keys=True, ensure_ascii=False)}{block.previous_hash}"
+                    )
+                    current_app.logger.debug(
+                        f"Block #{index} from node {source_node_id}: "
+                        f"calculated_hash={calculated_hash}, expected_hash={block_data['hash']}, "
+                        f"block_string={block_string}"
+                    )
+                    if calculated_hash != block_data['hash']:
+                        current_app.logger.error(
+                            f"Invalid hash for block #{index} from node {source_node_id}: "
+                            f"calculated {calculated_hash}, expected {block_data['hash']}"
+                        )
                         success = False
                         break
     
