@@ -284,24 +284,28 @@ class Node:
     
     def _ensure_genesis_block(self):
         with app.app_context():
+            # Если генезис-блок уже существует - пропускаем
             if BlockchainBlock.query.filter_by(index=0, node_id=self.node_id).first():
                 return
             
+            # Фиксированные данные генезис-блока
             genesis_data = {
                 'index': 0,
                 'timestamp': '2025-01-01T00:00:00+00:00',
                 'transactions': [{"message": "Genesis Block"}],
-                'previous_hash': "0"  # Без пробелов
+                'previous_hash': "0"
             }
             
-            block_string = json.dumps(genesis_data, sort_keys=True, ensure_ascii=False).encode('utf-8')
+            # Рассчитываем хеш
+            block_string = json.dumps(genesis_data, sort_keys=True).encode()
             genesis_hash = hashlib.sha256(block_string).hexdigest()
             
+            # Создаем и сохраняем блок
             genesis_block = BlockchainBlock(
                 index=0,
                 timestamp=datetime(2025, 1, 1, tzinfo=timezone.utc),
-                transactions=json.dumps(genesis_data['transactions'], ensure_ascii=False),
-                previous_hash="0",  # Без пробелов
+                transactions=json.dumps(genesis_data['transactions']),
+                previous_hash="0",
                 hash=genesis_hash,
                 node_id=self.node_id,
                 confirming_node_id=self.node_id,
@@ -310,7 +314,7 @@ class Node:
             
             db.session.add(genesis_block)
             db.session.commit()
-            app.logger.info(f"Node {self.node_id}: Genesis block created with hash {genesis_hash}")
+            app.logger.info(f"Node {self.node_id}: Genesis block created")
     
     def start_leader_timeout(self):
             async def periodic_check():
@@ -626,20 +630,20 @@ class Node:
 
     
     def create_genesis_block(self):
+        # Фиксированные данные генезис-блока
         genesis_data = {
             'index': 0,
             'timestamp': '2025-01-01T00:00:00+00:00',
             'transactions': [{"message": "Genesis Block"}],
-            'previous_hash': "0"  # Без пробелов
+            'previous_hash': "0"
         }
-        block_string = json.dumps(genesis_data, sort_keys=True, ensure_ascii=False).encode('utf-8')
-        genesis_hash = hashlib.sha256(block_string).hexdigest()
+        genesis_hash = hashlib.sha256(json.dumps(genesis_data).encode()).hexdigest()
         
         return Block(
             index=0,
             timestamp=datetime(2025, 1, 1, tzinfo=timezone.utc),
             transactions=genesis_data['transactions'],
-            previous_hash="0",  # Без пробелов
+            previous_hash="0",
             hash=genesis_hash
         )
             
