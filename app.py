@@ -197,15 +197,18 @@ class Block:
             raise ValueError(f"Timestamp must be a datetime object, got {type(self.timestamp)}")
         block_data = {
             'index': self.index,
-            'timestamp': self.timestamp.isoformat(),  # Сохраняем как есть, без принудительного +00:00
+            'timestamp': self.timestamp.isoformat(),
             'transactions': self.transactions,
             'previous_hash': self.previous_hash
         }
         block_string = json.dumps(block_data, sort_keys=True, ensure_ascii=False).encode('utf-8')
         current_app.logger.debug(
-            f"Calculating hash for block #{self.index}: "
+            f"Node 0: Calculating hash for block #{self.index}: "
             f"block_data={json.dumps(block_data, sort_keys=True, ensure_ascii=False)}, "
-            f"block_string={block_string.decode('utf-8')}"
+            f"block_string={block_string.decode('utf-8')}, "
+            f"previous_hash_length={len(self.previous_hash)}, "
+            f"transactions_types={[type(t) for t in self.transactions]}, "
+            f"transaction_keys={[t.keys() for t in self.transactions]}"
         )
         return hashlib.sha256(block_string).hexdigest()
 
