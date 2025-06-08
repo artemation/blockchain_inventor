@@ -208,7 +208,7 @@ class Block:
     def calculate_hash(self):
         block_data = {
             'index': self.index,
-            'timestamp': self.timestamp.isoformat() if self.timestamp else '2025-01-01T00:00:00+00:00',
+            'timestamp': '2025-01-01T00:00:00' if self.index == 0 else self.timestamp.isoformat(),
             'transactions': self.transactions,
             'previous_hash': self.previous_hash.strip()  # Очистка пробелов
         }
@@ -222,7 +222,7 @@ class Block:
             f"transactions_types={[type(t) for t in block_data['transactions']]}, "
             f"transaction_keys={[t.keys() for t in block_data['transactions']]}"
         )
-        return hashlib.sha256(block_string_encoded).hexdigest()  # Используем уже закодированные данные
+        return hashlib.sha256(block_string_encoded).hexdigest()
 
     def to_dict(self):
         return {
@@ -278,7 +278,6 @@ class Node:
     
     def _ensure_genesis_block(self):
         with current_app.app_context():
-            # Проверяем, существует ли генезис-блок
             existing_block = BlockchainBlock.query.filter_by(index=0, node_id=self.node_id).first()
             if existing_block:
                 current_app.logger.debug(f"Node {self.node_id}: Genesis block already exists with hash {existing_block.hash}")
@@ -286,12 +285,11 @@ class Node:
     
             genesis_data = {
                 'index': 0,
-                'timestamp': '2025-01-01T00:00:00+00:00',
+                'timestamp': '2025-01-01T00:00:00',  # Без +00:00
                 'transactions': [{"message": "Genesis Block"}],
-                'previous_hash': "0"  # Без пробелов
+                'previous_hash': '0'
             }
             
-            # Сериализация без пробелов
             block_string = json.dumps(genesis_data, sort_keys=True, ensure_ascii=False).encode('utf-8')
             genesis_hash = hashlib.sha256(block_string).hexdigest()
             
@@ -299,7 +297,7 @@ class Node:
                 index=0,
                 timestamp=datetime(2025, 1, 1, tzinfo=timezone.utc),
                 transactions=json.dumps(genesis_data['transactions'], ensure_ascii=False),
-                previous_hash="0",  # Явно задаем без пробелов
+                previous_hash='0',
                 hash=genesis_hash,
                 node_id=self.node_id,
                 confirming_node_id=self.node_id,
