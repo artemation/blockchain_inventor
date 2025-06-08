@@ -1177,24 +1177,24 @@ class Node:
                     else:
                         normalized_timestamp = datetime.now(timezone.utc).isoformat()
                     
-                    transaction_for_hash = {
-                        'ДокументID': int(transaction_data['ДокументID']),
-                        'Единица_ИзмеренияID': int(transaction_data['Единица_ИзмеренияID']),
-                        'Количество': float(transaction_data['Количество']),
-                        'СкладОтправительID': int(transaction_data['СкладОтправительID']),
-                        'СкладПолучательID': int(transaction_data['СкладПолучательID']),
-                        'ТоварID': int(transaction_data['ТоварID']),
-                        'user_id': int(user_id),
-                        'timestamp': normalized_timestamp,
-                        'transaction_hash': transaction_hash
-                    }
-                    
+                    # Сначала создаем строку для хэширования
                     transaction_string = json.dumps(
-                        transaction_for_hash,
+                        {
+                            'ДокументID': int(transaction_data['ДокументID']),
+                            'Единица_ИзмеренияID': int(transaction_data['Единица_ИзмеренияID']),
+                            'Количество': float(transaction_data['Количество']),
+                            'СкладОтправительID': int(transaction_data['СкладОтправительID']),
+                            'СкладПолучательID': int(transaction_data['СкладПолучательID']),
+                            'ТоварID': int(transaction_data['ТоварID']),
+                            'user_id': int(user_id),
+                            'timestamp': normalized_timestamp
+                        },
                         sort_keys=True,
                         ensure_ascii=False,
                         separators=(',', ':')
                     )
+                    
+                    # Теперь вычисляем хэш
                     transaction_hash = hashlib.sha256(transaction_string.encode('utf-8')).hexdigest()
                     app.logger.info(f"Transaction hash generated: {transaction_hash}")
                     
@@ -1212,7 +1212,7 @@ class Node:
                     new_block = Block(
                         index=index,
                         timestamp=datetime.now(timezone.utc),
-                        transactions=[transaction_for_hash],
+                        transactions=[transaction_data],  # Передаем данные транзакции
                         previous_hash=previous_hash
                     )
                     block_hash = new_block.calculate_hash()
@@ -1263,10 +1263,11 @@ class Node:
                     db.session.rollback()
                     app.logger.error(f"Error applying transaction: {e}")
                     return False, str(e)
-                    
+                        
         except Exception as e:
             app.logger.error(f"Error in apply_transaction: {e}")
             return False, str(e)
+
         
     def generate_digest(self, message):
         return hashlib.sha256(message).hexdigest()
