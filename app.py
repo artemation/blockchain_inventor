@@ -205,24 +205,21 @@ class Block:
         self.hash = self.calculate_hash()
 
     def calculate_hash(self):
-        if not isinstance(self.timestamp, datetime):
-            raise ValueError(f"Timestamp must be a datetime object, got {type(self.timestamp)}")
         block_data = {
             'index': self.index,
-            'timestamp': self.timestamp.isoformat(),
+            'timestamp': self.timestamp.isoformat() if self.timestamp else '2025-01-01T00:00:00+00:00',
             'transactions': self.transactions,
-            'previous_hash': self.previous_hash
+            'previous_hash': self.previous_hash.strip()
         }
-        block_string = json.dumps(block_data, sort_keys=True, ensure_ascii=False).encode('utf-8')
+        block_string = json.dumps(block_data, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
         current_app.logger.debug(
-            f"Node 0: Calculating hash for block #{self.index}: "
-            f"block_data={json.dumps(block_data, sort_keys=True, ensure_ascii=False)}, "
-            f"block_string={block_string.decode('utf-8')}, "
-            f"previous_hash_length={len(self.previous_hash)}, "
-            f"transactions_types={[type(t) for t in self.transactions]}, "
-            f"transaction_keys={[t.keys() for t in self.transactions]}"
+            f"Node {getattr(self, 'node_id', 'unknown')}: Calculating hash for block #{self.index}: "
+            f"block_data={block_string}, "
+            f"previous_hash_length={len(block_data['previous_hash'])}, "
+            f"transactions_types={[type(t) for t in block_data['transactions']]}, "
+            f"transaction_keys={[t.keys() for t in block_data['transactions']]}"
         )
-        return hashlib.sha256(block_string).hexdigest()
+        return hashlib.sha256(block_string.encode('utf-8')).hexdigest()
 
     def to_dict(self):
         return {
@@ -284,9 +281,12 @@ class Node:
     
     def _ensure_genesis_block(self):
         with app.app_context():
-            if BlockchainBlock.query.filter_by(index=0, node_id=self.node_id).first():
+            # Проверяем, существует ли генезис-блок
+            existing_block = BlockchainBlock.query.filter_by(index=0, node_id=self.node_id).first()
+            if existing_block:
+                current_app.logger.debug(f"Node {self.node_id}: Genesis block already exists with hash {existing_block.hash}")
                 return
-            
+    
             genesis_data = {
                 'index': 0,
                 'timestamp': '2025-01-01T00:00:00+00:00',
@@ -294,31 +294,45 @@ class Node:
                 'previous_hash': "0"  # Без пробелов
             }
             
-            # Используем separators для исключения пробелов
+            # Сериализация без пробелов
             block_string = json.dumps(genesis_data, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
             genesis_hash = hashlib.sha256(block_string).hexdigest()
             
             genesis_block = BlockchainBlock(
                 index=0,
                 timestamp=datetime(2025, 1, 1, tzinfo=timezone.utc),
-                transactions=json.dumps(genesis_data['transactions'], ensure_ascii=False),
-                previous_hash="0",  # Без пробелов
+                transactions=json.dumps(genesis_data['transactions'], ensure_ascii=False, separators=(',', ':')),
+                previous_hash="0",
                 hash=genesis_hash,
                 node_id=self.node_id,
                 confirming_node_id=self.node_id,
                 confirmed=True
             )
             
-            db.session.add(genesis_block)
-            db.session.commit()
-            app.logger.info(f"Node {self.node_id}: Genesis block created with hash {genesis_hash}")
+            try:
+                db.session.add(genesis_block)
+                db.session.commit()
+                current_app.logger.info(f"Node {self.node_id}: Genesis block created with hash {genesis_hash}")
+            except Exception as e:
+                db.session.rollback()
+                current_app.logger.error(f"Node {self.node_id}: Failed to create genesis block: {str(e)}")
+            
     
-    def start_leader_timeout(self):
-            async def periodic_check():
-                while True:
-                    await self.check_leader_activity()
-                    await asyncio.sleep(5)  # Проверять каждые 5 секунд
-            self.loop.create_task(periodic_check())
+    async def start_leader_timeout(self):
+        if hasattr(self, '_leader_timeout_task') and self._leader_timeout_task:
+            self._leader_timeout_task.cancel()
+            try:
+                await self._leader_timeout_task
+            except asyncio.CancelledError:
+                pass
+        
+        async def periodic_check():
+            while True:
+                await asyncio.sleep(self.leader_timeout)
+                await self.check_leader_timeout()
+        
+        self._leader_timeout_task = asyncio.create_task(periodic_check())
+        current_app.logger.info(f"Node {self.node_id}: Started leader timeout task")
 
     async def check_leader_activity(self):
         """
@@ -753,7 +767,6 @@ class Node:
         max_height = local_height
         source_nodes = []
         
-        # Собираем информацию о высоте цепочки у всех узлов
         for node_id, domain in self.nodes.items():
             if node_id == self.node_id:
                 continue
@@ -775,10 +788,8 @@ class Node:
             current_app.logger.info(f"Node {self.node_id} is up to date with height {local_height}")
             return
         
-        # Сортируем узлы по высоте цепочки (от большей к меньшей)
         source_nodes.sort(key=lambda x: x[2], reverse=True)
         
-        # Пробуем синхронизироваться с каждым узлом по очереди
         for source_node_id, domain, remote_height in source_nodes:
             current_app.logger.info(f"Node {self.node_id} attempting sync from node {source_node_id} with height {remote_height}")
             success = True
@@ -793,13 +804,11 @@ class Node:
                                 break
                             block_data = await response.json()
         
-                    # Очищаем previous_hash от пробелов
+                    # Очистка previous_hash
                     block_data['previous_hash'] = block_data['previous_hash'].strip()
                     
-                    # Проверяем целостность блока
-                    current_app.logger.debug(f"Raw block_data for block #{index}: {json.dumps(block_data, ensure_ascii=False)}")
                     timestamp_str = block_data['timestamp']
-                    if not ('+00:00' in timestamp_str or 'Z' in timestamp_str) and index != 0:  # Не добавляем для генезис-блока
+                    if not ('+00:00' in timestamp_str or 'Z' in timestamp_str) and index != 0:
                         timestamp_str += '+00:00'
                     timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
                     
@@ -810,14 +819,7 @@ class Node:
                         previous_hash=block_data['previous_hash']
                     )
                     calculated_hash = block.calculate_hash()
-                    current_app.logger.debug(
-                        f"Block #{index} from node {source_node_id}: "
-                        f"calculated_hash={calculated_hash}, expected_hash={block_data['hash']}, "
-                        f"index={block.index}, "
-                        f"timestamp={block.timestamp.isoformat()}, "
-                        f"serialized_transactions={json.dumps(block.transactions, sort_keys=True, ensure_ascii=False)}, "
-                        f"previous_hash={block.previous_hash}"
-                    )
+                    
                     if calculated_hash != block_data['hash']:
                         current_app.logger.error(
                             f"Invalid hash for block #{index} from node {source_node_id}: "
@@ -826,7 +828,6 @@ class Node:
                         success = False
                         break
         
-                    # Проверяем previous_hash
                     with app.app_context():
                         previous_block = db.session.query(BlockchainBlock).filter_by(index=index - 1, node_id=self.node_id).first()
                         expected_previous_hash = previous_block.hash if previous_block else "0"
@@ -838,14 +839,13 @@ class Node:
                             success = False
                             break
         
-                    # Сохраняем блок
                     with app.app_context():
                         existing_block = db.session.query(BlockchainBlock).filter_by(index=index, node_id=self.node_id).first()
                         if not existing_block:
                             new_block = BlockchainBlock(
                                 index=block_data['index'],
                                 timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
-                                transactions=json.dumps(block_data['transactions'], ensure_ascii=False),
+                                transactions=json.dumps(block_data['transactions'], ensure_ascii=False, separators=(',', ':')),
                                 previous_hash=block_data['previous_hash'],
                                 hash=block_data['hash'],
                                 node_id=self.node_id,
@@ -1288,7 +1288,6 @@ class Node:
             if not block:
                 return False, "Блок не существует"
             
-            # Для генезис-блока применяем особые правила проверки
             if block.index == 0:
                 expected_data = {
                     'index': 0,
@@ -1297,37 +1296,33 @@ class Node:
                     'previous_hash': "0"
                 }
                 
-                # Сериализация без пробелов
                 expected_hash = hashlib.sha256(
                     json.dumps(expected_data, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
                 ).hexdigest()
                 
                 if block.hash != expected_hash:
-                    return False, (
-                        f"Неверный хеш генезис-блока. Ожидалось: {expected_hash}, "
-                        f"получено: {block.hash}. Генезис-блок должен иметь фиксированные данные."
-                    )
+                    return False, f"Неверный хеш генезис-блока: ожидалось {expected_hash}, получено {block.hash}"
                 
                 return True, "Генезис-блок достоверен"
             
-            # Проверка для обычных блоков
-            normalized_timestamp = block.timestamp.isoformat() if block.timestamp else None
+            normalized_timestamp = block.timestamp.isoformat()
             if block.timestamp and not block.timestamp.tzinfo:
                 normalized_timestamp = datetime.fromtimestamp(block.timestamp.timestamp(), tz=timezone.utc).isoformat()
-    
+            
             block_data = {
                 'index': block.index,
                 'timestamp': normalized_timestamp,
                 'transactions': json.loads(block.transactions) if block.transactions else [],
-                'previous_hash': block.previous_hash.strip()  # Очистка от пробелов
+                'previous_hash': block.previous_hash.strip()
             }
+                
             calculated_hash = hashlib.sha256(
                 json.dumps(block_data, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
             ).hexdigest()
             
             if calculated_hash != block.hash:
-                return False, f"Хэш блока не совпадает с вычисленным (ожидалось: {calculated_hash}, получено: {block.hash})"
-    
+                return False, f"Хэш блока не совпадает: calculated_hash={calculated_hash}, expected_hash={block.hash}"
+            
             if block.index > 0:
                 prev_block = BlockchainBlock.query.filter_by(
                     index=block.index - 1,
@@ -1338,7 +1333,7 @@ class Node:
                     return False, "Предыдущий блок не найден"
                     
                 if block.previous_hash != prev_block.hash:
-                    return False, f"Хэш предыдущего блока не совпадает (ожидалось: {prev_block.hash}, получено: {block.previous_hash})"
+                    return False, f"Неверный previous_hash: ожидалось {prev_block.hash}, получено {block.previous_hash}"
             
             confirmations = BlockchainBlock.query.filter_by(
                 index=block.index,
@@ -1349,8 +1344,8 @@ class Node:
             required_confirmations = (total_nodes - 1) // 3 * 2 + 1
             
             if len(confirmations) < required_confirmations:
-                return False, f"Недостаточно подтверждений ({len(confirmations)} из {required_confirmations})"
-    
+                return False, f"Недостаточно подтверждений: {len(confirmations)} из {required_confirmations}"
+            
             return True, "Блок достоверен"
             
         except Exception as e:
