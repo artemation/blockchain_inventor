@@ -91,7 +91,7 @@ class ПриходРасход(db.Model):
     Количество = Column(Float)
     Единица_ИзмеренияID = Column(ForeignKey('Единица_измерения.Единица_ИзмеренияID'))
     TransactionHash = Column(String)
-    Timestamp = db.Column(db.DateTime)
+    Timestamp = Column(DateTime(timezone=False)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
 
     user = db.relationship('User', backref='transactions')
