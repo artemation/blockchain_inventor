@@ -1,4 +1,3 @@
-
 import os
 from flask import Flask, render_template, redirect, url_for, request, flash, jsonify, current_app
 from flask_sqlalchemy import SQLAlchemy
@@ -942,7 +941,10 @@ class Node:
         block_dict = {
             'index': block.index,
             'timestamp': block.timestamp.isoformat(),
-            'transactions': block.transactions,
+            'transactions': [{
+                **tx,
+                'transaction_hash': transaction_record.TransactionHash  # Добавляем хеш
+            } for tx in block.transactions],
             'previous_hash': block.previous_hash,
             'hash': block.hash
         }
@@ -1183,7 +1185,8 @@ class Node:
                         'СкладПолучательID': int(transaction_data['СкладПолучательID']),
                         'ТоварID': int(transaction_data['ТоварID']),
                         'user_id': int(user_id),
-                        'timestamp': normalized_timestamp
+                        'timestamp': normalized_timestamp,
+                        'transaction_hash': transaction_hash
                     }
                     
                     transaction_string = json.dumps(
@@ -1459,14 +1462,69 @@ async def receive_block():
             confirmed=True
         )
         db.session.add(block_db)
+        
+        # Process transactions in the block
         try:
+            transactions = block_data['transactions']
+            if not isinstance(transactions, list):
+                transactions = json.loads(transactions) if isinstance(transactions, str) else []
+            
+            for tx in transactions:
+                if not isinstance(tx, dict):
+                    continue
+                
+                tx_hash = tx.get('transaction_hash')
+                if not tx_hash:
+                    continue
+                
+                # Check if transaction already exists
+                if ПриходРасход.query.filter_by(TransactionHash=tx_hash).first():
+                    continue
+                
+                # Create new ПриходРасход record
+                try:
+                    new_record = ПриходРасход(
+                        СкладОтправительID=int(tx.get('СкладОтправительID', 0)),
+                        СкладПолучательID=int(tx.get('СкладПолучательID', 0)),
+                        ДокументID=int(tx.get('ДокументID', 0)),
+                        ТоварID=int(tx.get('ТоварID', 0)),
+                        Количество=float(tx.get('Количество', 0)),
+                        Единица_ИзмеренияID=int(tx.get('Единица_ИзмеренияID', 0)),
+                        TransactionHash=tx_hash,
+                        Timestamp=datetime.fromisoformat(tx.get('timestamp', '').replace('Z', '+00:00')),
+                        user_id=int(tx.get('user_id', 0))
+                    )
+                    db.session.add(new_record)
+                    
+                    # Update inventory
+                    if tx.get('СкладПолучательID'):
+                        update_запасы(
+                            tx['СкладПолучательID'],
+                            tx['ТоварID'],
+                            tx['Количество']
+                        )
+                    if tx.get('СкладОтправительID') and tx['СкладОтправительID'] != tx.get('СкладПолучательID', 0):
+                        update_запасы(
+                            tx['СкладОтправительID'],
+                            tx['ТоварID'],
+                            -tx['Количество']
+                        )
+                except Exception as tx_error:
+                    app.logger.error(f"Error processing transaction {tx_hash}: {str(tx_error)}")
+                    continue
+            
             db.session.commit()
-            app.logger.info(f"Block #{block.index} accepted by node {NODE_ID}")
-            return jsonify({'status': 'Block accepted'}), 200
+            app.logger.info(f"Block #{block.index} and transactions accepted by node {NODE_ID}")
+            return jsonify({'status': 'Block and transactions accepted'}), 200
+            
         except sqlalchemy.exc.IntegrityError as e:
             db.session.rollback()
-            app.logger.error(f"Error saving block: {e}")
+            app.logger.error(f"Error saving block or transactions: {e}")
             return jsonify({'error': 'Database error'}), 500
+        except Exception as e:
+            db.session.rollback()
+            app.logger.error(f"Unexpected error: {e}")
+            return jsonify({'error': str(e)}), 500
 
 
 async def broadcast_confirmation(block_index, creator_node_id, confirming_node_id):
@@ -2944,6 +3002,22 @@ async def reset_blockchain():
         current_app.logger.error(f"Error resetting blockchain for node {NODE_ID}: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': str(e)}), 500
 
+@app.route('/get_prihod_rashod', methods=['GET'])
+@csrf.exempt
+def get_prihod_rashod():
+    records = ПриходРасход.query.all()
+    return jsonify([{
+        'СкладОтправительID': r.СкладОтправительID,
+        'СкладПолучательID': r.СкладПолучательID,
+        'ДокументID': r.ДокументID,
+        'ТоварID': r.ТоварID,
+        'Количество': r.Количество,
+        'Единица_ИзмеренияID': r.Единица_ИзмеренияID,
+        'TransactionHash': r.TransactionHash,
+        'Timestamp': r.Timestamp.isoformat() if r.Timestamp else None,
+        'user_id': r.user_id
+    } for r in records])
+
 @app.context_processor
 def utility_processor():
     def get_warehouse_name(warehouse_id):
@@ -3003,7 +3077,47 @@ if __name__ == '__main__':
             db.session.commit()
             app.logger.warning(f"Node {NODE_ID}: Genesis block forced to DB")
         
-        # 3. Запускаем синхронизацию
+        # 3. Синхронизация записей ПриходРасход с других узлов
+        if NODE_ID != 0:  # Главный узел уже имеет все записи
+            try:
+                app.logger.info(f"Node {NODE_ID}: Starting ПриходРасход records sync...")
+                for node_id in range(4):
+                    if node_id == NODE_ID:
+                        continue
+                    
+                    url = f"https://{NODE_DOMAINS[node_id]}/get_prihod_rashod"
+                    try:
+                        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                            async with session.get(url) as response:
+                                if response.status == 200:
+                                    records = await response.json()
+                                    added = 0
+                                    for record in records:
+                                        if not ПриходРасход.query.filter_by(TransactionHash=record['TransactionHash']).first():
+                                            try:
+                                                new_record = ПриходРасход(
+                                                    СкладОтправительID=record['СкладОтправительID'],
+                                                    СкладПолучательID=record['СкладПолучательID'],
+                                                    ДокументID=record['ДокументID'],
+                                                    ТоварID=record['ТоварID'],
+                                                    Количество=record['Количество'],
+                                                    Единица_ИзмеренияID=record['Единица_ИзмеренияID'],
+                                                    TransactionHash=record['TransactionHash'],
+                                                    Timestamp=datetime.fromisoformat(record['Timestamp'].replace('Z', '+00:00')),
+                                                    user_id=record['user_id']
+                                                )
+                                                db.session.add(new_record)
+                                                added += 1
+                                            except Exception as e:
+                                                app.logger.error(f"Error adding record {record['TransactionHash']}: {str(e)}")
+                                    db.session.commit()
+                                    app.logger.info(f"Node {NODE_ID}: Added {added} records from node {node_id}")
+                    except Exception as e:
+                        app.logger.error(f"Error syncing from node {node_id}: {str(e)}")
+            except Exception as e:
+                app.logger.error(f"Error in ПриходРасход sync: {str(e)}")
+        
+        # 4. Запускаем синхронизацию блокчейна
         try:
             loop = asyncio.get_event_loop()
             loop.run_until_complete(current_node.sync_blockchain())
