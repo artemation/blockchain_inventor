@@ -1287,16 +1287,13 @@ class Node:
                 expected_data = {
                     'index': 0,
                     'timestamp': '2025-01-01T00:00:00+00:00',
-                    'transactions': [{
-                        "message": "Genesis Block",
-                        "timestamp": "2025-01-01T00:00:00+00:00"
-                    }],
+                    'transactions': [{"message": "Genesis Block"}],
                     'previous_hash': "0"
                 }
                 
-                # Рассчитываем ожидаемый хеш
+                # Рассчитываем ожидаемый хеш, используя json.dumps без separators для согласованности
                 expected_hash = hashlib.sha256(
-                    json.dumps(expected_data, sort_keys=True, separators=(',', ':')).encode('utf-8')
+                    json.dumps(expected_data, sort_keys=True, ensure_ascii=False).encode('utf-8')
                 ).hexdigest()
                 
                 if block.hash != expected_hash:
