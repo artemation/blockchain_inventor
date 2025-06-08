@@ -212,7 +212,7 @@ class Block:
             'transactions': self.transactions,
             'previous_hash': self.previous_hash.strip()  # Очистка пробелов
         }
-        block_string = json.dumps(block_data, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+        block_string = json.dumps(block_data, sort_keys=True, ensure_ascii=False).encode('utf-8')
         current_app.logger.debug(
             f"Node {getattr(self, 'node_id', 'unknown')}: "
             f"Calculating hash for block #{self.index}: "
@@ -291,7 +291,7 @@ class Node:
             }
             
             # Сериализация без пробелов
-            block_string = json.dumps(genesis_data, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+            block_string = json.dumps(genesis_data, sort_keys=True, ensure_ascii=False).encode('utf-8')
             genesis_hash = hashlib.sha256(block_string).hexdigest()
             
             genesis_block = BlockchainBlock(
@@ -1292,9 +1292,7 @@ class Node:
                     'previous_hash': "0"
                 }
                 
-                expected_hash = hashlib.sha256(
-                    json.dumps(expected_data, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
-                ).hexdigest()
+                expected_hash = hashlib.sha256(json.dumps(expected_data, sort_keys=True).encode('utf-8')).hexdigest()
                 
                 if block.hash != expected_hash:
                     return False, f"Неверный хеш генезис-блока: ожидалось {expected_hash}, получено {block.hash}"
