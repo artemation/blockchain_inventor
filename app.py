@@ -212,16 +212,17 @@ class Block:
             'transactions': self.transactions,
             'previous_hash': self.previous_hash.strip()  # Очистка пробелов
         }
-        block_string = json.dumps(block_data, sort_keys=True, ensure_ascii=False).encode('utf-8')
+        block_string = json.dumps(block_data, sort_keys=True, ensure_ascii=False)
+        block_string_encoded = block_string.encode('utf-8')  # Кодируем один раз
         current_app.logger.debug(
             f"Node {getattr(self, 'node_id', 'unknown')}: "
             f"Calculating hash for block #{self.index}: "
-            f"block_data={block_string}, "
+            f"block_data={block_string_encoded}, "
             f"previous_hash_length={len(block_data['previous_hash'])}, "
             f"transactions_types={[type(t) for t in block_data['transactions']]}, "
             f"transaction_keys={[t.keys() for t in block_data['transactions']]}"
         )
-        return hashlib.sha256(block_string.encode('utf-8')).hexdigest()
+        return hashlib.sha256(block_string_encoded).hexdigest()  # Используем уже закодированные данные
 
     def to_dict(self):
         return {
@@ -297,7 +298,7 @@ class Node:
             genesis_block = BlockchainBlock(
                 index=0,
                 timestamp=datetime(2025, 1, 1, tzinfo=timezone.utc),
-                transactions=json.dumps(genesis_data['transactions'], ensure_ascii=False, separators=(',', ':')),
+                transactions=json.dumps(genesis_data['transactions'], ensure_ascii=False),
                 previous_hash="0",  # Явно задаем без пробелов
                 hash=genesis_hash,
                 node_id=self.node_id,
@@ -841,7 +842,7 @@ class Node:
                             new_block = BlockchainBlock(
                                 index=block_data['index'],
                                 timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
-                                transactions=json.dumps(block_data['transactions'], ensure_ascii=False, separators=(',', ':')),
+                                transactions=json.dumps(block_data['transactions'], ensure_ascii=False),
                                 previous_hash=block_data['previous_hash'],
                                 hash=block_data['hash'],
                                 node_id=self.node_id,
@@ -1155,6 +1156,20 @@ class Node:
             transaction_data = json.loads(request)
             app.logger.debug(f"Transaction data to apply: {transaction_data}")
             
+            # Новая функция для преобразования байтовых ключей и значений в строки
+            def convert_to_str(data):
+                if isinstance(data, dict):
+                    return {k.decode('utf-8') if isinstance(k, bytes) else k: convert_to_str(v) for k, v in data.items()}
+                elif isinstance(data, list):
+                    return [convert_to_str(item) for item in data]
+                elif isinstance(data, bytes):
+                    return data.decode('utf-8')
+                return data
+            
+            # Преобразуем все ключи и значения в строки для корректной обработки кириллицы
+            transaction_data = convert_to_str(transaction_data)
+            app.logger.debug(f"Converted transaction data: {transaction_data}")
+            
             with app.app_context():
                 try:
                     required_fields = ['ДокументID', 'Единица_ИзмеренияID', 'Количество',
@@ -1167,6 +1182,7 @@ class Node:
                     if not user_id:
                         return False, "User ID cannot be empty"
                     
+                    # Нормализация временной метки
                     timestamp = transaction_data.get('timestamp')
                     if isinstance(timestamp, str):
                         try:
@@ -1179,59 +1195,50 @@ class Node:
                     else:
                         normalized_timestamp = datetime.now(timezone.utc).isoformat()
                     
-                    # Сначала создаем строку для хэширования
+                    # Формируем словарь для хэширования с явным приведением типов
+                    transaction_dict = {
+                        'ДокументID': int(transaction_data['ДокументID']),
+                        'Единица_ИзмеренияID': int(transaction_data['Единица_ИзмеренияID']),
+                        'Количество': float(transaction_data['Количество']),
+                        'СкладОтправительID': int(transaction_data['СкладОтправительID']),
+                        'СкладПолучательID': int(transaction_data['СкладПолучательID']),
+                        'ТоварID': int(transaction_data['ТоварID']),
+                        'user_id': int(user_id),
+                        'timestamp': normalized_timestamp
+                    }
+                    app.logger.debug(f"Transaction dict for hashing: {transaction_dict}")
+                    
+                    # Сериализуем данные без separators для согласованности
                     transaction_string = json.dumps(
-                        {
-                            'ДокументID': int(transaction_data['ДокументID']),
-                            'Единица_ИзмеренияID': int(transaction_data['Единица_ИзмеренияID']),
-                            'Количество': float(transaction_data['Количество']),
-                            'СкладОтправительID': int(transaction_data['СкладОтправительID']),
-                            'СкладПолучательID': int(transaction_data['СкладПолучательID']),
-                            'ТоварID': int(transaction_data['ТоварID']),
-                            'user_id': int(user_id),
-                            'timestamp': normalized_timestamp
-                        },
+                        transaction_dict,
                         sort_keys=True,
-                        ensure_ascii=False,
-                        separators=(',', ':')
+                        ensure_ascii=False
                     )
-                    
-                    # Теперь вычисляем хэш
+                    app.logger.debug(f"Transaction string: {transaction_string}")
                     transaction_hash = hashlib.sha256(transaction_string.encode('utf-8')).hexdigest()
-                    app.logger.info(f"Transaction hash generated: {transaction_hash}")
+                    app.logger.debug(f"Computed transaction hash: {transaction_hash}")
                     
-                    # Проверка наличия склада и товара
-                    склад = Склады.query.get(transaction_data['СкладОтправительID'])
+                    # Проверяем, совпадает ли хэш с предоставленным digest
+                    if digest != transaction_hash:
+                        return False, f"Digest mismatch: expected {digest}, got {transaction_hash}"
+                    
+                    # Проверяем наличие записи с таким хэшем
+                    existing_record = ПриходРасход.query.filter_by(TransactionHash=transaction_hash).first()
+                    if existing_record:
+                        app.logger.info(f"Transaction {sequence_number} with hash {transaction_hash} already exists")
+                        return True, "Transaction already applied"
+                    
+                    # Проверяем наличие необходимых сущностей
+                    склад_отправитель = Склады.query.get(transaction_data['СкладОтправительID'])
+                    склад_получатель = Склады.query.get(transaction_data['СкладПолучательID'])
                     товар = Товары.query.get(transaction_data['ТоварID'])
-                    if not склад or not товар:
-                        return False, "Invalid warehouse or product"
+                    единица_измерения = Единица_измерения.query.get(transaction_data['Единица_ИзмеренияID'])
+                    user = User.query.get(user_id)
                     
-                    # Создание нового блока
-                    previous_block = db.session.query(BlockchainBlock).filter_by(node_id=self.node_id).order_by(BlockchainBlock.index.desc()).first()
-                    previous_hash = previous_block.hash if previous_block else "0"
-                    index = (previous_block.index + 1) if previous_block else 0
+                    if not (склад_отправитель and склад_получатель and товар and единица_измерения and user):
+                        return False, "Invalid warehouse, item, unit, or user ID"
                     
-                    new_block = Block(
-                        index=index,
-                        timestamp=datetime.now(timezone.utc),
-                        transactions=[transaction_data],  # Передаем данные транзакции
-                        previous_hash=previous_hash
-                    )
-                    block_hash = new_block.calculate_hash()
-                    
-                    # Создание записи блока для базы данных
-                    block_db = BlockchainBlock(
-                        index=new_block.index,
-                        timestamp=new_block.timestamp,
-                        transactions=json.dumps(new_block.transactions, ensure_ascii=False),
-                        previous_hash=new_block.previous_hash,
-                        hash=block_hash,
-                        node_id=self.node_id,
-                        confirming_node_id=self.node_id,
-                        confirmed=False
-                    )
-                    
-                    # Создание записи ПриходРасход
+                    # Создаем новую запись ПриходРасход
                     new_record = ПриходРасход(
                         СкладОтправительID=transaction_data['СкладОтправительID'],
                         СкладПолучательID=transaction_data['СкладПолучательID'],
@@ -1244,31 +1251,86 @@ class Node:
                         user_id=user_id
                     )
                     
-                    # Рассылка блока и проверка консенсуса
-                    confirmations, total_nodes = await self.broadcast_new_block(new_block, new_record, block_db)
+                    # Обновляем запасы на складе получателе
+                    success, message = update_запасы(
+                        transaction_data['СкладПолучательID'],
+                        transaction_data['ТоварID'],
+                        transaction_data['Количество']
+                    )
+                    if not success:
+                        app.logger.error(f"Failed to update receiver inventory: {message}")
+                        return False, message
                     
-                    # Проверка консенсуса по PBFT (2f+1)
-                    f = (total_nodes - 1) // 3
-                    required_confirmations = 2 * f + 1
-                    app.logger.info(f"Consensus check: {confirmations}/{required_confirmations} confirmations")
+                    # Если склады разные, обновляем запасы на складе отправителе
+                    if transaction_data['СкладОтправительID'] != transaction_data['СкладПолучательID']:
+                        success, message = update_запасы(
+                            transaction_data['СкладОтправительID'],
+                            transaction_data['ТоварID'],
+                            -transaction_data['Количество']
+                        )
+                        if not success:
+                            app.logger.error(f"Failed to update sender inventory: {message}")
+                            return False, message
                     
-                    if confirmations >= required_confirmations:
-                        app.logger.info(f"Consensus reached for block #{new_block.index}")
-                        return True, "Transaction applied successfully"
-                    else:
-                        app.logger.warning(f"Consensus not reached for block #{new_block.index}: {confirmations}/{required_confirmations}")
-                        db.session.rollback()
-                        self.rollback_unconfirmed_blocks()
+                    # Создаем новый блок
+                    last_block = BlockchainBlock.query.filter_by(node_id=self.node_id).order_by(BlockchainBlock.index.desc()).first()
+                    previous_hash = last_block.hash if last_block else "0"
+                    block_index = last_block.index + 1 if last_block else 0
+                    
+                    block = Block(
+                        index=block_index,
+                        timestamp=datetime.now(timezone.utc),
+                        transactions=[transaction_dict],
+                        previous_hash=previous_hash
+                    )
+                    
+                    # Сохраняем блок в базе
+                    block_db = BlockchainBlock(
+                        index=block.index,
+                        timestamp=block.timestamp,
+                        transactions=json.dumps(block.transactions, ensure_ascii=False),
+                        previous_hash=block.previous_hash,
+                        hash=block.hash,
+                        node_id=self.node_id,
+                        confirming_node_id=self.node_id,
+                        confirmed=False
+                    )
+                    
+                    # Создаем запись транзакции
+                    transaction_record = ПриходРасход(
+                        СкладОтправительID=transaction_data['СкладОтправительID'],
+                        СкладПолучательID=transaction_data['СкладПолучательID'],
+                        ДокументID=transaction_data['ДокументID'],
+                        ТоварID=transaction_data['ТоварID'],
+                        Количество=transaction_data['Количество'],
+                        Единица_ИзмеренияID=transaction_data['Единица_ИзмеренияID'],
+                        TransactionHash=transaction_hash,
+                        Timestamp=datetime.fromisoformat(normalized_timestamp.replace('Z', '+00:00')),
+                        user_id=user_id
+                    )
+                    
+                    # Рассылаем блок другим узлам
+                    confirmations, total_nodes = await self.broadcast_new_block(block, transaction_record, block_db)
+                    
+                    required_confirmations = (total_nodes // 3) * 2 + 1
+                    if confirmations < required_confirmations:
                         return False, f"Consensus not reached: {confirmations}/{required_confirmations} confirmations"
+                    
+                    # Подтверждаем запись в базе
+                    db.session.add(new_record)
+                    db.session.commit()
+                    
+                    app.logger.info(f"Transaction {sequence_number} applied successfully with hash {transaction_hash}")
+                    return True, "Transaction applied successfully"
                     
                 except Exception as e:
                     db.session.rollback()
-                    app.logger.error(f"Error applying transaction: {e}")
-                    return False, str(e)
-                        
+                    app.logger.error(f"Error applying transaction {sequence_number}: {str(e)}")
+                    return False, f"Error applying transaction: {str(e)}"
+                    
         except Exception as e:
-            app.logger.error(f"Error in apply_transaction: {e}")
-            return False, str(e)
+            app.logger.error(f"Error parsing transaction {sequence_number}: {str(e)}")
+            return False, f"Error parsing transaction: {str(e)}"
 
         
     def generate_digest(self, message):
