@@ -1274,7 +1274,7 @@ class Node:
                 )
                 
                 # Обновляем запасы на складе
-                success, message = update_ledger(
+                success, message = update_запасы(
                     transaction_data['СкладПолучательID'],
                     transaction_data['ТоварID'],
                     float(transaction_data['Количество'])
@@ -1284,7 +1284,7 @@ class Node:
                     return False, message
                 
                 if transaction_data['СкладОтправительID'] != transaction_data['СкладПолучательID']:
-                    success, message = update_ledger(
+                    success, message = update_запасы(
                         transaction_data['СкладОтправительID'],
                         transaction_data['ТоварID'],
                         -float(transaction_data['Количество'])
