@@ -265,20 +265,14 @@ class Node:
         self.is_leader = (node_id == 0)
         self.requests = {}
         self.chain = []
-        self.leader_timeout = None
+        self.leader_timeout = 5
         self.view_change_in_progress = False
         self.consensus_times = []
         self.view_change_success = []
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
-        # Удаляем следующие строки:
-        # self.loop.run_until_complete(self.sync_genesis_block())
-        # self.loop.run_until_complete(self.sync_view_number())
-        # self.loop.run_until_complete(self.sync_blockchain())
-        self.start_leader_timeout()
-
-        # Гарантированное создание генезис-блока при инициализации
-        self._ensure_genesis_block()
+        self._leader_timeout_task = None  # Инициализируем атрибут для задачи
+        # Удаляем вызов self._ensure_genesis_block() и self.start_leader_timeout()
     
     def _ensure_genesis_block(self):
         with current_app.app_context():
@@ -3053,77 +3047,83 @@ atexit.register(cleanup)
 
 
 if __name__ == '__main__':
+    # Словарь для хранения узлов
+    nodes = {}
+
     with app.app_context():
-        # Жёсткая гарантия создания генезис-блока
-        current_node = nodes[NODE_ID]
-        
-        # 1. Создаем генезис-блок (пересоздаем, если уже существует)
-        genesis_block = current_node.create_genesis_block()
-        app.logger.info(f"Node {NODE_ID}: Genesis block created with hash {genesis_block.hash}")
-        
-        # 2. Принудительно сохраняем в БД, если не сохранилось
-        if not BlockchainBlock.query.filter_by(index=0).first():
-            genesis_db = BlockchainBlock(
-                index=0,
-                timestamp=genesis_block.timestamp,
-                transactions=json.dumps(genesis_block.transactions),
-                previous_hash=genesis_block.previous_hash,
-                hash=genesis_block.hash,
-                node_id=NODE_ID,
-                confirming_node_id=NODE_ID,
-                confirmed=True
+        # Создаем таблицы базы данных
+        db.create_all()
+        app.logger.info("Database tables created")
+
+        # Инициализируем узлы
+        for i in range(4):
+            nodes[i] = Node(
+                node_id=i,
+                nodes=NODE_DOMAINS,
+                host=NODE_DOMAINS[i].split(':')[0] if ':' in NODE_DOMAINS[i] else NODE_DOMAINS[i],
+                port=NODE_DOMAINS[i].split(':')[1] if ':' in NODE_DOMAINS[i] else '443'
             )
-            db.session.add(genesis_db)
-            db.session.commit()
-            app.logger.warning(f"Node {NODE_ID}: Genesis block forced to DB")
-        
-        # 3. Синхронизация записей ПриходРасход с других узлов
-        if NODE_ID != 0:  # Главный узел уже имеет все записи
-            try:
+            app.logger.info(f"Node {i} initialized")
+
+        # Гарантируем создание генезис-блока для текущего узла
+        current_node = nodes[NODE_ID]
+        current_node._ensure_genesis_block()
+        db.session.commit()
+        app.logger.info(f"Node {NODE_ID}: Ensured genesis block")
+
+        # Запускаем асинхронные задачи
+        async def init_node():
+            # Запускаем leader_timeout
+            await current_node.start_leader_timeout()
+            app.logger.info(f"Node {NODE_ID}: Leader timeout started")
+
+            # Синхронизируем блокчейн
+            await current_node.sync_blockchain()
+            app.logger.info(f"Node {NODE_ID}: Blockchain synced")
+
+            # Синхронизируем записи ПриходРасход
+            if NODE_ID != 0:  # Главный узел уже имеет все записи
                 app.logger.info(f"Node {NODE_ID}: Starting ПриходРасход records sync...")
-                async def sync_prihod_rashod():
-                    for node_id in range(4):
-                        if node_id == NODE_ID:
-                            continue
-                        
-                        url = f"https://{NODE_DOMAINS[node_id]}/get_prihod_rashod"
-                        try:
-                            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-                                async with session.get(url) as response:
-                                    if response.status == 200:
-                                        records = await response.json()
-                                        added = 0
-                                        for record in records:
-                                            if not ПриходРасход.query.filter_by(TransactionHash=record['TransactionHash']).first():
-                                                try:
-                                                    new_record = ПриходРасход(
-                                                        СкладОтправительID=record['СкладОтправительID'],
-                                                        СкладПолучательID=record['СкладПолучательID'],
-                                                        ДокументID=record['ДокументID'],
-                                                        ТоварID=record['ТоварID'],
-                                                        Количество=record['Количество'],
-                                                        Единица_ИзмеренияID=record['Единица_ИзмеренияID'],
-                                                        TransactionHash=record['TransactionHash'],
-                                                        Timestamp=datetime.fromisoformat(record['Timestamp'].replace('Z', '+00:00')),
-                                                        user_id=record['user_id']
-                                                    )
-                                                    db.session.add(new_record)
-                                                    added += 1
-                                                except Exception as e:
-                                                    app.logger.error(f"Error adding record {record['TransactionHash']}: {str(e)}")
-                                        db.session.commit()
-                                        app.logger.info(f"Node {NODE_ID}: Added {added} records from node {node_id}")
-                        except Exception as e:
-                            app.logger.error(f"Error syncing from node {node_id}: {str(e)}")
-                asyncio.run(sync_prihod_rashod())
-            except Exception as e:
-                app.logger.error(f"Error in ПриходРасход sync: {str(e)}")
-        
-        # 4. Запускаем синхронизацию блокчейна
+                for node_id in range(4):
+                    if node_id == NODE_ID:
+                        continue
+                    url = f"https://{NODE_DOMAINS[node_id]}/get_prihod_rashod"
+                    try:
+                        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                            async with session.get(url) as response:
+                                if response.status == 200:
+                                    records = await response.json()
+                                    added = 0
+                                    for record in records:
+                                        if not ПриходРасход.query.filter_by(TransactionHash=record['TransactionHash']).first():
+                                            try:
+                                                new_record = ПриходРасход(
+                                                    СкладОтправительID=record['СкладОтправительID'],
+                                                    СкладПолучательID=record['СкладПолучательID'],
+                                                    ДокументID=record['ДокументID'],
+                                                    ТоварID=record['ТоварID'],
+                                                    Количество=record['Количество'],
+                                                    Единица_ИзмеренияID=record['Единица_ИзмеренияID'],
+                                                    TransactionHash=record['TransactionHash'],
+                                                    Timestamp=datetime.fromisoformat(record['Timestamp'].replace('Z', '+00:00')),
+                                                    user_id=record['user_id']
+                                                )
+                                                db.session.add(new_record)
+                                                added += 1
+                                            except Exception as e:
+                                                app.logger.error(f"Error adding record {record['TransactionHash']}: {str(e)}")
+                                    db.session.commit()
+                                    app.logger.info(f"Node {NODE_ID}: Added {added} records from node {node_id}")
+                    except Exception as e:
+                        app.logger.error(f"Error syncing from node {node_id}: {str(e)}")
+
+        # Выполняем асинхронные задачи
         try:
-            asyncio.run(current_node.sync_blockchain())
+            asyncio.run(init_node())
             app.logger.info(f"Node {NODE_ID} ready")
         except Exception as e:
-            app.logger.error(f"Sync error: {e}")
-        
-        app.run(host='0.0.0.0', port=PORT)
+            app.logger.error(f"Initialization error for node {NODE_ID}: {str(e)}")
+            raise
+
+        # Запускаем приложение
+        app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
