@@ -294,7 +294,8 @@ class Node:
                 'previous_hash': "0"  # Без пробелов
             }
             
-            block_string = json.dumps(genesis_data, sort_keys=True, ensure_ascii=False).encode('utf-8')
+            # Используем separators для исключения пробелов
+            block_string = json.dumps(genesis_data, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
             genesis_hash = hashlib.sha256(block_string).hexdigest()
             
             genesis_block = BlockchainBlock(
@@ -746,12 +747,12 @@ class Node:
     async def sync_blockchain(self):
         current_app.logger.info(f"Node {self.node_id} starting blockchain sync")
         headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
-    
+        
         with app.app_context():
             local_height = db.session.query(func.max(BlockchainBlock.index)).filter_by(node_id=self.node_id).scalar() or -1
         max_height = local_height
         source_nodes = []
-    
+        
         # Собираем информацию о высоте цепочки у всех узлов
         for node_id, domain in self.nodes.items():
             if node_id == self.node_id:
@@ -769,14 +770,14 @@ class Node:
                                 current_app.logger.info(f"Found chain at node {node_id} with height {remote_height}")
             except Exception as e:
                 current_app.logger.error(f"Error checking height from node {node_id}: {str(e)}")
-    
+        
         if not source_nodes:
             current_app.logger.info(f"Node {self.node_id} is up to date with height {local_height}")
             return
-    
+        
         # Сортируем узлы по высоте цепочки (от большей к меньшей)
         source_nodes.sort(key=lambda x: x[2], reverse=True)
-    
+        
         # Пробуем синхронизироваться с каждым узлом по очереди
         for source_node_id, domain, remote_height in source_nodes:
             current_app.logger.info(f"Node {self.node_id} attempting sync from node {source_node_id} with height {remote_height}")
@@ -791,13 +792,17 @@ class Node:
                                 success = False
                                 break
                             block_data = await response.json()
-    
+        
+                    # Очищаем previous_hash от пробелов
+                    block_data['previous_hash'] = block_data['previous_hash'].strip()
+                    
                     # Проверяем целостность блока
                     current_app.logger.debug(f"Raw block_data for block #{index}: {json.dumps(block_data, ensure_ascii=False)}")
                     timestamp_str = block_data['timestamp']
                     if not ('+00:00' in timestamp_str or 'Z' in timestamp_str) and index != 0:  # Не добавляем для генезис-блока
                         timestamp_str += '+00:00'
                     timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                    
                     block = Block(
                         index=block_data['index'],
                         timestamp=timestamp,
@@ -820,18 +825,19 @@ class Node:
                         )
                         success = False
                         break
-    
+        
                     # Проверяем previous_hash
                     with app.app_context():
                         previous_block = db.session.query(BlockchainBlock).filter_by(index=index - 1, node_id=self.node_id).first()
                         expected_previous_hash = previous_block.hash if previous_block else "0"
                         if block_data['previous_hash'] != expected_previous_hash:
                             current_app.logger.error(
-                                f"Invalid previous_hash for block #{index} from node {source_node_id}: expected {expected_previous_hash}, got {block_data['previous_hash']}"
+                                f"Invalid previous_hash for block #{index} from node {source_node_id}: "
+                                f"expected {expected_previous_hash}, got {block_data['previous_hash']}"
                             )
                             success = False
                             break
-    
+        
                     # Сохраняем блок
                     with app.app_context():
                         existing_block = db.session.query(BlockchainBlock).filter_by(index=index, node_id=self.node_id).first()
@@ -856,11 +862,11 @@ class Node:
                     db.session.rollback()
                     success = False
                     break
-    
+        
             if success:
                 current_app.logger.info(f"Node {self.node_id} successfully synced to height {remote_height}")
                 return
-    
+        
         current_app.logger.warning(f"Node {self.node_id} failed to sync from any node")
     
     async def request_block_from_node(self, node_id, block_index):
@@ -1291,9 +1297,9 @@ class Node:
                     'previous_hash': "0"
                 }
                 
-                # Рассчитываем ожидаемый хеш, используя json.dumps без separators для согласованности
+                # Сериализация без пробелов
                 expected_hash = hashlib.sha256(
-                    json.dumps(expected_data, sort_keys=True, ensure_ascii=False).encode('utf-8')
+                    json.dumps(expected_data, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
                 ).hexdigest()
                 
                 if block.hash != expected_hash:
@@ -1304,7 +1310,7 @@ class Node:
                 
                 return True, "Генезис-блок достоверен"
             
-            # Проверка для обычных блоков (остается без изменений)
+            # Проверка для обычных блоков
             normalized_timestamp = block.timestamp.isoformat() if block.timestamp else None
             if block.timestamp and not block.timestamp.tzinfo:
                 normalized_timestamp = datetime.fromtimestamp(block.timestamp.timestamp(), tz=timezone.utc).isoformat()
@@ -1313,10 +1319,10 @@ class Node:
                 'index': block.index,
                 'timestamp': normalized_timestamp,
                 'transactions': json.loads(block.transactions) if block.transactions else [],
-                'previous_hash': block.previous_hash
+                'previous_hash': block.previous_hash.strip()  # Очистка от пробелов
             }
             calculated_hash = hashlib.sha256(
-                json.dumps(block_data, sort_keys=True).encode('utf-8')
+                json.dumps(block_data, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
             ).hexdigest()
             
             if calculated_hash != block.hash:
