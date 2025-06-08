@@ -217,7 +217,7 @@ class Block:
             f"Calculating hash for block #{self.index}: "
             f"block_data={block_string}, "
             f"previous_hash_length={len(block_data['previous_hash'])}, "
-            f"transactions_types={[type(t) t in block_data['transactions']]}, "
+            f"transactions_types={[type(t) for t in block_data['transactions']]}, "
             f"transaction_keys={[t.keys() for t in block_data['transactions']]}"
         )
         return hashlib.sha256(block_string.encode('utf-8')).hexdigest()
