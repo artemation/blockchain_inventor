@@ -1300,7 +1300,7 @@ class Node:
                 app.logger.info(f"Node {self.node_id} added transaction {sequence_number} and block #{new_block.index}")
                 
                 # Транслируем новый блок другим узлам
-                confirmations, total_nodes = await self._broadcast_new_block(new_block, new_record, block_db)
+                confirmations, total_nodes = await self.broadcast_new_block(new_block, new_record, block_db)  # Исправлено
                 if confirmations >= (2 * ((total_nodes - 1) // 3) + 1):
                     block_db.confirmed = True
                     db.session.commit()
