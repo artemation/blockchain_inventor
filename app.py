@@ -209,7 +209,7 @@ class Block:
             'index': self.index,
             'timestamp': self.timestamp.isoformat() if self.timestamp else '2025-01-01T00:00:00+00:00',
             'transactions': self.transactions,
-            'previous_hash': self.previous_hash.strip()
+            'previous_hash': self.previous_hash.strip()  # Очистка пробелов
         }
         block_string = json.dumps(block_data, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
         current_app.logger.debug(
@@ -280,7 +280,7 @@ class Node:
         self._ensure_genesis_block()
     
     def _ensure_genesis_block(self):
-        with app.app_context():
+        with current_app.app_context():
             # Проверяем, существует ли генезис-блок
             existing_block = BlockchainBlock.query.filter_by(index=0, node_id=self.node_id).first()
             if existing_block:
@@ -302,7 +302,7 @@ class Node:
                 index=0,
                 timestamp=datetime(2025, 1, 1, tzinfo=timezone.utc),
                 transactions=json.dumps(genesis_data['transactions'], ensure_ascii=False, separators=(',', ':')),
-                previous_hash="0",
+                previous_hash="0",  # Явно задаем без пробелов
                 hash=genesis_hash,
                 node_id=self.node_id,
                 confirming_node_id=self.node_id,
@@ -319,6 +319,7 @@ class Node:
             
     
     async def start_leader_timeout(self):
+        import asyncio
         if hasattr(self, '_leader_timeout_task') and self._leader_timeout_task:
             self._leader_timeout_task.cancel()
             try:
@@ -328,8 +329,11 @@ class Node:
         
         async def periodic_check():
             while True:
-                await asyncio.sleep(self.leader_timeout)
-                await self.check_leader_timeout()
+                try:
+                    await asyncio.sleep(self.leader_timeout)
+                    await self.check_leader_timeout()
+                except asyncio.CancelledError:
+                    break
         
         self._leader_timeout_task = asyncio.create_task(periodic_check())
         current_app.logger.info(f"Node {self.node_id}: Started leader timeout task")
@@ -762,7 +766,7 @@ class Node:
         current_app.logger.info(f"Node {self.node_id} starting blockchain sync")
         headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
         
-        with app.app_context():
+        with current_app.app_context():
             local_height = db.session.query(func.max(BlockchainBlock.index)).filter_by(node_id=self.node_id).scalar() or -1
         max_height = local_height
         source_nodes = []
@@ -828,7 +832,7 @@ class Node:
                         success = False
                         break
         
-                    with app.app_context():
+                    with current_app.app_context():
                         previous_block = db.session.query(BlockchainBlock).filter_by(index=index - 1, node_id=self.node_id).first()
                         expected_previous_hash = previous_block.hash if previous_block else "0"
                         if block_data['previous_hash'] != expected_previous_hash:
@@ -839,7 +843,7 @@ class Node:
                             success = False
                             break
         
-                    with app.app_context():
+                    with current_app.app_context():
                         existing_block = db.session.query(BlockchainBlock).filter_by(index=index, node_id=self.node_id).first()
                         if not existing_block:
                             new_block = BlockchainBlock(
@@ -856,18 +860,18 @@ class Node:
                             db.session.commit()
                             current_app.logger.info(f"Node {self.node_id} synced block #{index} from node {source_node_id}")
                         else:
-                            current_app.logger.debug(f"Block #{index} already exists")
+                            current_app.logger.debug(f"Block #{index} has already exists")
                 except Exception as e:
-                    current_app.logger.error(f"Error syncing block #{index} from node {source_node_id}: {str(e)}")
+                    current_app.logger.error(f"Error syncing block #{index}: {str(e)}")
                     db.session.rollback()
                     success = False
                     break
         
             if success:
-                current_app.logger.info(f"Node {self.node_id} successfully synced to height {remote_height}")
+                current_app.logger.info(f"Node {self.node_id} successfully synced with height {remote_height}")
                 return
         
-        current_app.logger.warning(f"Node {self.node_id} failed to sync from any node")
+        current_app.logger.warning(f"{Node {self.node_id} failed to sync with any node}")
     
     async def request_block_from_node(self, node_id, block_index):
         """Запросить блок с определенным индексом у узла"""
