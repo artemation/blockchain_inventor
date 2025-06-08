@@ -29,15 +29,7 @@ import atexit
 from tenacity import retry, stop_after_attempt, wait_fixed
 
 load_dotenv()
-# Определяем NODE_ID в начале
-NODE_ID = int(os.environ.get('NODE_ID', 0))
 
-NODE_DOMAINS = {
-    0: os.environ.get('NODE0_DOMAIN', 'blockchaininventory0.up.railway.app'),
-    1: os.environ.get('NODE1_DOMAIN', 'blockchaininventory1.up.railway.app'),
-    2: os.environ.get('NODE2_DOMAIN', 'blockchaininventory2.up.railway.app'),
-    3: os.environ.get('NODE3_DOMAIN', 'blockchaininventory3.up.railway.app')
-}
 
 app = Flask(__name__)
 @app.template_filter('datetimeformat')
@@ -1348,7 +1340,15 @@ class Node:
 
 # Создаем узлы блокчейна
 # Используем динамическое создание на основе переменных окружения:
+# Определяем NODE_ID в начале
 NODE_ID = int(os.environ.get('NODE_ID', 0))
+
+NODE_DOMAINS = {
+    0: os.environ.get('NODE0_DOMAIN', 'blockchaininventory0.up.railway.app'),
+    1: os.environ.get('NODE1_DOMAIN', 'blockchaininventory1.up.railway.app'),
+    2: os.environ.get('NODE2_DOMAIN', 'blockchaininventory2.up.railway.app'),
+    3: os.environ.get('NODE3_DOMAIN', 'blockchaininventory3.up.railway.app')
+}
 PORT = int(os.environ.get('PORT', 5000))
 DOMAIN_PREFIX = os.environ.get('DOMAIN_PREFIX', '')
 
@@ -3046,10 +3046,8 @@ def cleanup():
 atexit.register(cleanup)
 
 
-if __name__ == '__main__':
-    # Словарь для хранения узлов
-    nodes = {}
-
+def init_app():
+    """Инициализация приложения и узлов"""
     with app.app_context():
         # Создаем таблицы базы данных
         db.create_all()
@@ -3125,5 +3123,8 @@ if __name__ == '__main__':
             app.logger.error(f"Initialization error for node {NODE_ID}: {str(e)}")
             raise
 
-        # Запускаем приложение
-        app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+# Вызываем инициализацию перед запуском приложения
+init_app()
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
