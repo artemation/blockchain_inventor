@@ -3081,46 +3081,47 @@ if __name__ == '__main__':
         if NODE_ID != 0:  # Главный узел уже имеет все записи
             try:
                 app.logger.info(f"Node {NODE_ID}: Starting ПриходРасход records sync...")
-                for node_id in range(4):
-                    if node_id == NODE_ID:
-                        continue
-                    
-                    url = f"https://{NODE_DOMAINS[node_id]}/get_prihod_rashod"
-                    try:
-                        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-                            async with session.get(url) as response:
-                                if response.status == 200:
-                                    records = await response.json()
-                                    added = 0
-                                    for record in records:
-                                        if not ПриходРасход.query.filter_by(TransactionHash=record['TransactionHash']).first():
-                                            try:
-                                                new_record = ПриходРасход(
-                                                    СкладОтправительID=record['СкладОтправительID'],
-                                                    СкладПолучательID=record['СкладПолучательID'],
-                                                    ДокументID=record['ДокументID'],
-                                                    ТоварID=record['ТоварID'],
-                                                    Количество=record['Количество'],
-                                                    Единица_ИзмеренияID=record['Единица_ИзмеренияID'],
-                                                    TransactionHash=record['TransactionHash'],
-                                                    Timestamp=datetime.fromisoformat(record['Timestamp'].replace('Z', '+00:00')),
-                                                    user_id=record['user_id']
-                                                )
-                                                db.session.add(new_record)
-                                                added += 1
-                                            except Exception as e:
-                                                app.logger.error(f"Error adding record {record['TransactionHash']}: {str(e)}")
-                                    db.session.commit()
-                                    app.logger.info(f"Node {NODE_ID}: Added {added} records from node {node_id}")
-                    except Exception as e:
-                        app.logger.error(f"Error syncing from node {node_id}: {str(e)}")
+                async def sync_prihod_rashod():
+                    for node_id in range(4):
+                        if node_id == NODE_ID:
+                            continue
+                        
+                        url = f"https://{NODE_DOMAINS[node_id]}/get_prihod_rashod"
+                        try:
+                            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                                async with session.get(url) as response:
+                                    if response.status == 200:
+                                        records = await response.json()
+                                        added = 0
+                                        for record in records:
+                                            if not ПриходРасход.query.filter_by(TransactionHash=record['TransactionHash']).first():
+                                                try:
+                                                    new_record = ПриходРасход(
+                                                        СкладОтправительID=record['СкладОтправительID'],
+                                                        СкладПолучательID=record['СкладПолучательID'],
+                                                        ДокументID=record['ДокументID'],
+                                                        ТоварID=record['ТоварID'],
+                                                        Количество=record['Количество'],
+                                                        Единица_ИзмеренияID=record['Единица_ИзмеренияID'],
+                                                        TransactionHash=record['TransactionHash'],
+                                                        Timestamp=datetime.fromisoformat(record['Timestamp'].replace('Z', '+00:00')),
+                                                        user_id=record['user_id']
+                                                    )
+                                                    db.session.add(new_record)
+                                                    added += 1
+                                                except Exception as e:
+                                                    app.logger.error(f"Error adding record {record['TransactionHash']}: {str(e)}")
+                                        db.session.commit()
+                                        app.logger.info(f"Node {NODE_ID}: Added {added} records from node {node_id}")
+                        except Exception as e:
+                            app.logger.error(f"Error syncing from node {node_id}: {str(e)}")
+                asyncio.run(sync_prihod_rashod())
             except Exception as e:
                 app.logger.error(f"Error in ПриходРасход sync: {str(e)}")
         
         # 4. Запускаем синхронизацию блокчейна
         try:
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(current_node.sync_blockchain())
+            asyncio.run(current_node.sync_blockchain())
             app.logger.info(f"Node {NODE_ID} ready")
         except Exception as e:
             app.logger.error(f"Sync error: {e}")
