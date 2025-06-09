@@ -3142,8 +3142,8 @@ def init_app():
                                     app.logger.info(f"Node {NODE_ID}: Added {added} records from node {node_id}")
                                 else:
                                     app.logger.error(f"Node {NODE_ID}: Failed to fetch records from node {node_id}: status={response.status}")
-                            except Exception as e:
-                                app.logger.error(f"Node {NODE_ID}: Error syncing from node {node_id}: {e}")
+                    except Exception as e:
+                        app.logger.error(f"Node {NODE_ID}: Error syncing from node {node_id}: {e}")
         # Выполняем асинхронные задачи
         try:
             asyncio.run(init_node())
