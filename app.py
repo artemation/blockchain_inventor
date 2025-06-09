@@ -206,23 +206,19 @@ class Block:
         self.hash = self.calculate_hash()
 
     def calculate_hash(self):
+        app.logger.debug(f"Node unknown: Calculating hash for block #{self.index}: previous_hash_length={len(self.previous_hash)}, transactions_types={[type(t) for t in self.transactions]}, transaction_keys={[t.keys() for t in self.transactions]}")
+        
         block_data = {
             'index': self.index,
-            'timestamp': '2025-01-01T00:00:00' if self.index == 0 else self.timestamp.isoformat(),
+            'timestamp': self.timestamp.isoformat() if isinstance(self.timestamp, datetime) else self.timestamp,
             'transactions': self.transactions,
-            'previous_hash': self.previous_hash.strip()  # Очистка пробелов
+            'previous_hash': self.previous_hash
         }
-        block_string = json.dumps(block_data, sort_keys=True, ensure_ascii=False)
-        block_string_encoded = block_string.encode('utf-8')  # Кодируем один раз
-        current_app.logger.debug(
-            f"Node {getattr(self, 'node_id', 'unknown')}: "
-            f"Calculating hash for block #{self.index}: "
-            f"block_data={block_string_encoded}, "
-            f"previous_hash_length={len(block_data['previous_hash'])}, "
-            f"transactions_types={[type(t) for t in block_data['transactions']]}, "
-            f"transaction_keys={[t.keys() for t in block_data['transactions']]}"
-        )
-        return hashlib.sha256(block_string_encoded).hexdigest()
+        
+        block_string = json.dumps(block_data, sort_keys=True, ensure_ascii=False).encode('utf-8')
+        app.logger.debug(f"Node unknown: Calculating hash for block #{self.index}: block_data={block_string}")
+        
+        return hashlib.sha256(block_string).hexdigest()
 
     def to_dict(self):
         return {
@@ -1166,18 +1162,15 @@ class Node:
     async def apply_transaction(self, sequence_number, digest):
         app.logger.debug(f"Node {self.node_id} applying transaction {sequence_number} with digest {digest}")
         
-        # Получаем запрос по sequence_number
         request = self.requests.get(sequence_number)
         if not request:
             app.logger.error(f"Request with sequence number {sequence_number} not found")
             return False, f"Request with sequence number {sequence_number} not found"
         
         try:
-            # Десериализуем данные транзакции
             transaction_data = json.loads(request)
             app.logger.debug(f"Transaction data to apply: {transaction_data}")
             
-            # Функция для преобразования bytes в str, если данные содержат байтовые строки
             def convert_to_str(data):
                 if isinstance(data, dict):
                     return {k.decode('utf-8') if isinstance(k, bytes) else k: convert_to_str(v) for k, v in data.items()}
@@ -1191,18 +1184,15 @@ class Node:
             app.logger.debug(f"Converted transaction data: {transaction_data}")
             
             with app.app_context():
-                # Проверяем наличие обязательных полей
                 required_fields = ['ДокументID', 'Единица_ИзмеренияID', 'Количество', 'СкладОтправительID', 'СкладПолучательID', 'ТоварID', 'user_id', 'timestamp']
                 for field in required_fields:
                     if field not in transaction_data:
                         return False, f"Missing required field: {field}"
                 
-                # Проверяем user_id
                 user_id = transaction_data['user_id']
                 if not user_id:
                     return False, "User ID cannot be empty"
                 
-                # Нормализуем временную метку
                 timestamp = transaction_data.get('timestamp')
                 if isinstance(timestamp, str):
                     try:
@@ -1215,7 +1205,6 @@ class Node:
                 else:
                     normalized_timestamp = datetime.now(timezone.utc).isoformat()
                 
-                # Формируем словарь транзакции для хэширования
                 transaction_dict = {
                     'ДокументID': int(transaction_data['ДокументID']),
                     'Единица_ИзмеренияID': int(transaction_data['Единица_ИзмеренияID']),
@@ -1227,18 +1216,15 @@ class Node:
                     'timestamp': normalized_timestamp
                 }
                 
-                # Вычисляем хэш транзакции
                 transaction_string = json.dumps(transaction_dict, sort_keys=True, ensure_ascii=False)
                 computed_hash = hashlib.sha256(transaction_string.encode('utf-8')).hexdigest()
                 app.logger.debug(f"Computed transaction hash: {computed_hash}")
                 
-                # Проверяем, не существует ли уже запись с таким хэшем
                 existing_record = ПриходРасход.query.filter_by(TransactionHash=computed_hash).first()
                 if existing_record:
                     app.logger.info(f"Transaction with hash {computed_hash} already exists")
                     return True, "Transaction already exists"
                 
-                # Создаем запись ПриходРасход
                 new_record = ПриходРасход(
                     СкладОтправительID=transaction_data['СкладОтправительID'],
                     СкладПолучательID=transaction_data['СкладПолучательID'],
@@ -1251,17 +1237,15 @@ class Node:
                     user_id=transaction_data['user_id']
                 )
                 
-                # Создаем новый блок
                 last_block = db.session.query(BlockchainBlock).filter_by(node_id=self.node_id).order_by(BlockchainBlock.index.desc()).first()
                 previous_hash = last_block.hash if last_block else '0'
                 new_block = Block(
                     index=last_block.index + 1 if last_block else 0,
                     timestamp=datetime.now(timezone.utc),
-                    transactions=[transaction_dict],
+                    transactions=[transaction_dict],  # Не добавляем transaction_hash
                     previous_hash=previous_hash
                 )
                 
-                # Создаем запись блока в базе данных
                 block_db = BlockchainBlock(
                     index=new_block.index,
                     timestamp=new_block.timestamp,
@@ -1273,7 +1257,6 @@ class Node:
                     confirmed=False
                 )
                 
-                # Обновляем запасы на складе
                 success, message = update_запасы(
                     transaction_data['СкладПолучательID'],
                     transaction_data['ТоварID'],
@@ -1293,14 +1276,12 @@ class Node:
                         app.logger.error(f"Failed to update sender inventory: {message}")
                         return False, message
                 
-                # Сохраняем транзакцию и блок в базе данных
                 db.session.add(new_record)
                 db.session.add(block_db)
                 db.session.commit()
                 app.logger.info(f"Node {self.node_id} added transaction {sequence_number} and block #{new_block.index}")
                 
-                # Транслируем новый блок другим узлам
-                confirmations, total_nodes = await self.broadcast_new_block(new_block, new_record, block_db)  # Исправлено
+                confirmations, total_nodes = await self.broadcast_new_block(new_block, new_record, block_db)
                 if confirmations >= (2 * ((total_nodes - 1) // 3) + 1):
                     block_db.confirmed = True
                     db.session.commit()
@@ -3040,20 +3021,28 @@ async def reset_blockchain():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/get_prihod_rashod', methods=['GET'])
-@csrf.exempt
 def get_prihod_rashod():
-    records = ПриходРасход.query.all()
-    return jsonify([{
-        'СкладОтправительID': r.СкладОтправительID,
-        'СкладПолучательID': r.СкладПолучательID,
-        'ДокументID': r.ДокументID,
-        'ТоварID': r.ТоварID,
-        'Количество': r.Количество,
-        'Единица_ИзмеренияID': r.Единица_ИзмеренияID,
-        'TransactionHash': r.TransactionHash,
-        'Timestamp': r.Timestamp.isoformat() if r.Timestamp else None,
-        'user_id': r.user_id
-    } for r in records])
+    try:
+        records = ПриходРасход.query.all()
+        result = [
+            {
+                'id': record.id,
+                'СкладОтправительID': record.СкладОтправительID,
+                'СкладПолучательID': record.СкладПолучательID,
+                'ДокументID': record.ДокументID,
+                'ТоварID': record.ТоварID,
+                'Количество': float(record.Количество),
+                'Единица_ИзмеренияID': record.Единица_ИзмеренияID,
+                'TransactionHash': record.TransactionHash,
+                'Timestamp': record.Timestamp.isoformat(),
+                'user_id': record.user_id
+            } for record in records
+        ]
+        app.logger.debug(f"Node {g.node.node_id}: Sending {len(result)} ПриходРасход records")
+        return jsonify(result), 200
+    except Exception as e:
+        app.logger.error(f"Failed to fetch ПриходРасход records: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.context_processor
 def utility_processor():
