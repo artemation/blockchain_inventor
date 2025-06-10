@@ -809,7 +809,7 @@ class Node:
             responses = await asyncio.gather(*tasks, return_exceptions=True)
             for (node_id, domain), response in zip([(n, d) for n, d in self.nodes.items() if n != self.node_id], responses):
                 if isinstance(response, Exception):
-                    current_app.logger.error(f"Error checking height from node {node_id}: {str(response)}")
+                    current_app.logger.error(f"Node {self.node_id}: Error checking height from node {node_id}: {str(response)}")
                     continue
                 if response.status == 200:
                     data = await response.json()
@@ -817,9 +817,9 @@ class Node:
                     if remote_height > local_height:
                         source_nodes.append((node_id, domain, remote_height))
                         max_height = max(max_height, remote_height)
-                        current_app.logger.info(f"Found chain at node {node_id} with height {remote_height}")
+                        current_app.logger.info(f"Node {self.node_id}: Found chain at node {node_id} with height {remote_height}")
                 else:
-                    current_app.logger.error(f"Node {node_id} returned status {response.status} for height check")
+                    current_app.logger.error(f"Node {self.node_id}: Node {node_id} returned status {response.status} for height check")
         
         if not source_nodes:
             current_app.logger.info(f"Node {self.node_id} is up to date with height {local_height}")
@@ -829,6 +829,7 @@ class Node:
         source_nodes.sort(key=lambda x: x[2], reverse=True)
         for source_node_id, domain, remote_height in source_nodes:
             current_app.logger.info(f"Node {self.node_id} attempting sync from node {source_node_id} with height {remote_height}")
+            success = True
             try:
                 async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as session:
                     for index in range(local_height + 1, remote_height + 1):
@@ -836,11 +837,14 @@ class Node:
                         url = f"https://{domain}/get_block/{index}"
                         async with session.get(url) as response:
                             if response.status != 200:
-                                raise ValueError(f"Failed to fetch block #{index} from node {source_node_id}: status={response.status}")
+                                current_app.logger.error(
+                                    f"Node {self.node_id}: Failed to fetch block #{index} from node {source_node_id}: status={response.status}"
+                                success = False
+                                break
                             block_data = await response.json()
                         
                         # Обработка timestamp
-                        timestamp_str = block_data['timestamp']
+                        timestamp_str = block_data['timestamp'].strip()
                         if not ('+00:00' in timestamp_str or 'Z' in timestamp_str) and index != 0:
                             timestamp_str += '+00:00'
                         timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
@@ -860,7 +864,8 @@ class Node:
                                 f"Node {self.node_id}: Invalid hash for block #{index} from node {source_node_id}: "
                                 f"calculated {calculated_hash}, expected {block_data['hash']}"
                             )
-                            raise ValueError(f"Hash mismatch for block #{index}")
+                            success = False
+                            break
                         
                         # Проверка previous_hash
                         with current_app.app_context():
@@ -871,7 +876,8 @@ class Node:
                                     f"Node {self.node_id}: Invalid previous_hash for block #{index} from node {source_node_id}: "
                                     f"expected {expected_previous_hash}, got {block_data['previous_hash']}"
                                 )
-                                raise ValueError(f"Previous hash mismatch for block #{index}")
+                                success = False
+                                break
                             
                             # Проверка на существование блока
                             existing_block = db.session.query(BlockchainBlock).filter_by(index=index, node_id=self.node_id).first()
@@ -893,17 +899,18 @@ class Node:
                             db.session.add(new_block)
                             db.session.commit()
                             current_app.logger.info(f"Node {self.node_id} synced block #{index} from node {source_node_id}")
-                
-                current_app.logger.info(f"Node {self.node_id} successfully synced to height {remote_height}")
-                return
             
             except Exception as e:
-                current_app.logger.error(f"Node {self.node_id}: Error syncing from node {source_node_id}: {str(e)}")
+                current_app.logger.error(f"Node {self.node_id}: Error syncing block #{index} from node {source_node_id}: {str(e)}")
                 with current_app.app_context():
                     db.session.rollback()
-                continue
+                success = False
+            
+            if success:
+                current_app.logger.info(f"Node {self.node_id} successfully synced to height {remote_height}")
+                return
         
-        raise RuntimeError(f"Node {self.node_id} failed to sync with any node")
+        current_app.logger.warning(f"Node {self.node_id} failed to sync with any node")
     
     async def request_block_from_node(self, node_id, block_index):
         """Запросить блок с определенным индексом у узла"""
