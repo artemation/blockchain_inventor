@@ -208,18 +208,31 @@ class Block:
     def calculate_hash(self):
         app.logger.debug(f"Node unknown: Calculating hash for block #{self.index}: previous_hash_length={len(self.previous_hash)}, transactions_types={[type(t) for t in self.transactions]}, transaction_keys={[t.keys() for t in self.transactions]}")
         
+        # Убедимся, что timestamp — объект datetime с временной зоной
+        timestamp = self.timestamp
+        if isinstance(timestamp, str):
+            timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+        if timezone.is_naive(timestamp):
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        
         # Создаем копию данных блока
         block_data = {
             'index': self.index,
-            'timestamp': self.timestamp.isoformat() if isinstance(self.timestamp, datetime) else self.timestamp,
+            'timestamp': timestamp.isoformat(),  # Всегда включает временную зону, например, +00:00
             'transactions': [
                 {k: v for k, v in tx.items() if k != 'transaction_hash'}  # Исключаем transaction_hash
                 for tx in self.transactions
             ],
-            'previous_hash': self.previous_hash
+            'previous_hash': self.previous_hash.strip()  # Убираем пробелы
         }
         
-        block_string = json.dumps(block_data, sort_keys=True, ensure_ascii=False).encode('utf-8')
+        # Сериализуем с сортировкой ключей и без экранирования UTF-8
+        block_string = json.dumps(
+            block_data,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(',', ':')
+        ).encode('utf-8')
         app.logger.debug(f"Node unknown: Calculating hash for block #{self.index}: block_data={block_string}")
         
         return hashlib.sha256(block_string).hexdigest()
@@ -780,122 +793,117 @@ class Node:
         
         with current_app.app_context():
             local_height = db.session.query(func.max(BlockchainBlock.index)).filter_by(node_id=self.node_id).scalar() or -1
+        
         max_height = local_height
         source_nodes = []
         
-        for node_id, domain in self.nodes.items():
-            if node_id == self.node_id:
-                continue
-            try:
-                async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as session:
-                    url = f"https://{domain}/get_blockchain_height"
-                    async with session.get(url) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            remote_height = data.get('height', -1)
-                            if remote_height > local_height:
-                                source_nodes.append((node_id, domain, remote_height))
-                                max_height = max(max_height, remote_height)
-                                current_app.logger.info(f"Found chain at node {node_id} with height {remote_height}")
-            except Exception as e:
-                current_app.logger.error(f"Error checking height from node {node_id}: {str(e)}")
+        # Сбор высот блокчейна с других узлов
+        async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as session:
+            tasks = []
+            for node_id, domain in self.nodes.items():
+                if node_id == self.node_id:
+                    continue
+                url = f"https://{domain}/get_blockchain_height"
+                tasks.append(session.get(url))
+            
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            for (node_id, domain), response in zip([(n, d) for n, d in self.nodes.items() if n != self.node_id], responses):
+                if isinstance(response, Exception):
+                    current_app.logger.error(f"Error checking height from node {node_id}: {str(response)}")
+                    continue
+                if response.status == 200:
+                    data = await response.json()
+                    remote_height = data.get('height', -1)
+                    if remote_height > local_height:
+                        source_nodes.append((node_id, domain, remote_height))
+                        max_height = max(max_height, remote_height)
+                        current_app.logger.info(f"Found chain at node {node_id} with height {remote_height}")
+                else:
+                    current_app.logger.error(f"Node {node_id} returned status {response.status} for height check")
         
         if not source_nodes:
             current_app.logger.info(f"Node {self.node_id} is up to date with height {local_height}")
             return
         
+        # Попытка синхронизации с узлами, начиная с самого высокого
         source_nodes.sort(key=lambda x: x[2], reverse=True)
-        
         for source_node_id, domain, remote_height in source_nodes:
             current_app.logger.info(f"Node {self.node_id} attempting sync from node {source_node_id} with height {remote_height}")
-            success = True
-            for index in range(local_height + 1, remote_height + 1):
-                try:
-                    async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as session:
+            try:
+                async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as session:
+                    for index in range(local_height + 1, remote_height + 1):
+                        # Получение блока
                         url = f"https://{domain}/get_block/{index}"
                         async with session.get(url) as response:
                             if response.status != 200:
-                                current_app.logger.error(f"Failed to fetch block #{index} from node {source_node_id}: status={response.status}")
-                                success = False
-                                break
+                                raise ValueError(f"Failed to fetch block #{index} from node {source_node_id}: status={response.status}")
                             block_data = await response.json()
-        
-                    # Очистка previous_hash
-                    block_data['previous_hash'] = block_data['previous_hash'].strip()
-                    
-                    timestamp_str = block_data['timestamp']
-                    if not ('+00:00' in timestamp_str or 'Z' in timestamp_str) and index != 0:
-                        timestamp_str += '+00:00'
-                    timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                    
-                    block = Block(
-                        index=block_data['index'],
-                        timestamp=timestamp,
-                        transactions=block_data['transactions'],
-                        previous_hash=block_data['previous_hash']
-                    )
-                    calculated_hash = block.calculate_hash()
-                    
-                    if calculated_hash != block_data['hash']:
-                        current_app.logger.error(
-                            f"Invalid hash for block #{index} from node {source_node_id}: "
-                            f"calculated {calculated_hash}, expected {block_data['hash']}"
+                        
+                        # Обработка timestamp
+                        timestamp_str = block_data['timestamp']
+                        if not ('+00:00' in timestamp_str or 'Z' in timestamp_str) and index != 0:
+                            timestamp_str += '+00:00'
+                        timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                        
+                        # Создание объекта блока
+                        block = Block(
+                            index=block_data['index'],
+                            timestamp=timestamp,
+                            transactions=block_data['transactions'],
+                            previous_hash=block_data['previous_hash'].strip()
                         )
-                        success = False
-                        break
-        
-                    with current_app.app_context():
-                        previous_block = db.session.query(BlockchainBlock).filter_by(index=index - 1, node_id=self.node_id).first()
-                        expected_previous_hash = previous_block.hash if previous_block else "0"
-                        if block_data['previous_hash'] != expected_previous_hash:
+                        
+                        # Проверка хэша
+                        calculated_hash = block.calculate_hash()
+                        if calculated_hash != block_data['hash']:
                             current_app.logger.error(
-                                f"Invalid previous_hash for block #{index} from node {source_node_id}: "
-                                f"expected {expected_previous_hash}, got {block_data['previous_hash']}"
+                                f"Node {self.node_id}: Invalid hash for block #{index} from node {source_node_id}: "
+                                f"calculated {calculated_hash}, expected {block_data['hash']}"
                             )
-                            success = False
-                            break
-        
-                    with app.app_context():
-                        existing_block = db.session.query(BlockchainBlock).filter_by(index=index, node_id=self.node_id).first()
-                        if not existing_block:
-                            block_for_hash = Block(
-                                index=block_data['index'],
-                                timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
-                                transactions=block_data['transactions'],
-                                previous_hash=block_data['previous_hash']
-                            )
-                            if block_for_hash.calculate_hash() != block_data['hash']:
-                                app.logger.error(
-                                    f"Node {self.node_id}: Double-check failed for block #{index}: "
-                                    f"recalculated hash {block_for_hash.calculate_hash()}: expected {block_data['hash']}"
+                            raise ValueError(f"Hash mismatch for block #{index}")
+                        
+                        # Проверка previous_hash
+                        with current_app.app_context():
+                            previous_block = db.session.query(BlockchainBlock).filter_by(index=index - 1, node_id=self.node_id).first()
+                            expected_previous_hash = previous_block.hash if previous_block else "0" * 64 if index == 0 else None
+                            if block_data['previous_hash'] != expected_previous_hash:
+                                current_app.logger.error(
+                                    f"Node {self.node_id}: Invalid previous_hash for block #{index} from node {source_node_id}: "
+                                    f"expected {expected_previous_hash}, got {block_data['previous_hash']}"
                                 )
+                                raise ValueError(f"Previous hash mismatch for block #{index}")
+                            
+                            # Проверка на существование блока
+                            existing_block = db.session.query(BlockchainBlock).filter_by(index=index, node_id=self.node_id).first()
+                            if existing_block:
+                                current_app.logger.debug(f"Node {self.node_id}: Block #{index} already exists")
                                 continue
+                            
+                            # Добавление блока
                             new_block = BlockchainBlock(
                                 index=block_data['index'],
-                                timestamp=datetime.fromisoformat(block_data['timestamp'].replace('Z', '+00:00')),
+                                timestamp=timestamp,
                                 transactions=json.dumps(block_data['transactions'], ensure_ascii=False),
                                 previous_hash=block_data['previous_hash'],
                                 hash=block_data['hash'],
                                 node_id=self.node_id,
-                                confirming_node_id=self.node_id,
-                                confirmed=True
+                                confirming_node_id=block_data.get('confirming_node_id', self.node_id),
+                                confirmed=block_data.get('confirmed', True)
                             )
                             db.session.add(new_block)
                             db.session.commit()
                             current_app.logger.info(f"Node {self.node_id} synced block #{index} from node {source_node_id}")
-                        else:
-                            current_app.logger.debug(f"Block #{index} already exists")
-                except Exception as e:
-                    current_app.logger.error(f"Error syncing block #{index} from node {source_node_id}: {str(e)}")
-                    db.session.rollback()
-                    success = False
-                    break
-        
-            if success:
+                
                 current_app.logger.info(f"Node {self.node_id} successfully synced to height {remote_height}")
                 return
+            
+            except Exception as e:
+                current_app.logger.error(f"Node {self.node_id}: Error syncing from node {source_node_id}: {str(e)}")
+                with current_app.app_context():
+                    db.session.rollback()
+                continue
         
-        current_app.logger.warning(f"Node {self.node_id} failed to sync with any node")
+        raise RuntimeError(f"Node {self.node_id} failed to sync with any node")
     
     async def request_block_from_node(self, node_id, block_index):
         """Запросить блок с определенным индексом у узла"""
