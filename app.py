@@ -997,7 +997,7 @@ class Node:
         responses = await asyncio.gather(*tasks, return_exceptions=True)
         for node_id, response in responses:
             if isinstance(response, Exception):
-                current_app.logger.error(f"Error sending to node {node_id}: {response}")
+                app.logger.error(f"Error sending to node {node_id}: {response}")
                 continue
             try:
                 status, body = response
@@ -1059,6 +1059,52 @@ class Node:
             db.session.rollback()
         
         return confirmations, total_nodes
+
+    async def sync_prihod_rashod(self):
+        app.logger.info(f"Node {self.node_id}: Starting ПриходРасход records sync...")
+        for node_id, domain in self.nodes.items():
+            if node_id == self.node_id:
+                continue
+            url = f"https://{domain}/get_prihod_rashod"
+            try:
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                    app.logger.debug(f"Node {self.node_id}: Requesting ПриходРасход records from node {node_id} at {url}")
+                    async with session.get(url) as response:
+                        app.logger.debug(f"Node {self.node_id}: Response from node {node_id}: status={response.status}")
+                        if response.status == 200:
+                            records = await response.json()
+                            app.logger.debug(f"Node {self.node_id}: Received {len(records)} records from node {node_id}")
+                            added = 0
+                            for record in records:
+                                required_fields = ['СкладОтправительID', 'СкладПолучательID', 'ДокументID', 'ТоварID', 'Количество', 'Единица_ИзмеренияID', 'TransactionHash', 'user_id']
+                                if not all(field in record for field in required_fields):
+                                    app.logger.warning(f"Node {self.node_id}: Skipping invalid record from node {node_id}: {record}")
+                                    continue
+                                if not ПриходРасход.query.filter_by(TransactionHash=record['TransactionHash']).first():
+                                    try:
+                                        new_record = ПриходРасход(
+                                            СкладОтправительID=record['СкладОтправительID'],
+                                            СкладПолучательID=record['СкладПолучательID'],
+                                            ДокументID=record['ДокументID'],
+                                            ТоварID=record['ТоварID'],
+                                            Количество=record['Количество'],
+                                            Единица_ИзмеренияID=record['Единица_ИзмеренияID'],
+                                            TransactionHash=record['TransactionHash'],
+                                            Timestamp=datetime.fromisoformat(record['Timestamp'].replace('Z', '+00:00')) if record['Timestamp'] else None,
+                                            user_id=record['user_id']
+                                        )
+                                        db.session.add(new_record)
+                                        added += 1
+                                    except Exception as e:
+                                        app.logger.error(f"Node {self.node_id}: Error adding record {record['TransactionHash']} from node {node_id}: {str(e)}")
+                                        db.session.rollback()
+                                        continue
+                            db.session.commit()
+                            app.logger.info(f"Node {self.node_id}: Added {added} records from node {node_id}")
+                        else:
+                            app.logger.error(f"Node {self.node_id}: Failed to fetch records from node {node_id}: status={response.status}")
+            except Exception as e:
+                app.logger.error(f"Node {self.node_id}: Error syncing from node {node_id}: {e}")
     
     async def receive_block(self, sender_id, block_dict):
         app.logger.debug(f"Node {self.node_id} receiving block #{block_dict['index']} from node {sender_id}")
@@ -3161,7 +3207,7 @@ def init_app():
         async def init_node():
             # Запускаем leader_timeout
             await current_node.start_leader_timeout()
-            app.logger.info(f"Node {NODE_ID}: Leader timeout started")
+            app.logger.info(f"Node {NODE_ID}: Started leader timeout")
 
             # Синхронизируем блокчейн
             await current_node.sync_blockchain()
@@ -3169,50 +3215,9 @@ def init_app():
 
             # Синхронизируем записи ПриходРасход
             if NODE_ID != 0:  # Главный узел уже имеет все записи
-                app.logger.info(f"Node {NODE_ID}: Starting ПриходРасход records sync...")
-                for node_id in range(4):
-                    if node_id == NODE_ID:
-                        continue
-                    url = f"https://{NODE_DOMAINS[node_id]}/get_prihod_rashod"
-                    try:
-                        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-                            app.logger.debug(f"Node {NODE_ID}: Requesting ПриходРасход records from node {node_id} at {url}")
-                            async with session.get(url) as response:
-                                app.logger.debug(f"Node {NODE_ID}: Response from node {node_id}: status={response.status}")
-                                if response.status == 200:
-                                    records = await response.json()
-                                    app.logger.debug(f"Node {NODE_ID}: Received {len(records)} records from node {node_id}")
-                                    added = 0
-                                    for record in records:
-                                        required_fields = ['СкладОтправительID', 'СкладПолучательID', 'ДокументID', 'ТоварID', 'Количество', 'Единица_ИзмеренияID', 'TransactionHash', 'user_id']
-                                        if not all(field in record for field in required_fields):
-                                            app.logger.warning(f"Node {NODE_ID}: Skipping invalid record from node {node_id}: {record}")
-                                            continue
-                                        if not ПриходРасход.query.filter_by(TransactionHash=record['TransactionHash']).first():
-                                            try:
-                                                new_record = ПриходРасход(
-                                                    СкладОтправительID=record['СкладОтправительID'],
-                                                    СкладПолучательID=record['СкладПолучательID'],
-                                                    ДокументID=record['ДокументID'],
-                                                    ТоварID=record['ТоварID'],
-                                                    Количество=record['Количество'],
-                                                    Единица_ИзмеренияID=record['Единица_ИзмеренияID'],
-                                                    TransactionHash=record['TransactionHash'],
-                                                    Timestamp=datetime.fromisoformat(record['Timestamp'].replace('Z', '+00:00')) if record['Timestamp'] else None,
-                                                    user_id=record['user_id']
-                                                )
-                                                db.session.add(new_record)
-                                                added += 1
-                                            except Exception as e:
-                                                app.logger.error(f"Node {NODE_ID}: Error adding record {record['TransactionHash']} from node {node_id}: {str(e)}")
-                                                db.session.rollback()
-                                                continue
-                                    db.session.commit()
-                                    app.logger.info(f"Node {NODE_ID}: Added {added} records from node {node_id}")
-                                else:
-                                    app.logger.error(f"Node {NODE_ID}: Failed to fetch records from node {node_id}: status={response.status}")
-                    except Exception as e:
-                        app.logger.error(f"Node {NODE_ID}: Error syncing from node {node_id}: {e}")
+                await current_node.sync_prihod_rashod()
+                app.logger.info(f"Node {NODE_ID}: Completed ПриходРасход records sync")
+
         # Выполняем асинхронные задачи
         try:
             asyncio.run(init_node())
