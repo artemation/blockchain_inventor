@@ -1026,7 +1026,6 @@ class Node:
                         hash=block_db.hash, node_id=self.node_id
                     ).first()
                     if not existing_block:
-                        db.session.add(transaction_record)
                         db.session.add(block_db)
                         current_app.logger.info(f"Block #{block.index} created and committed")
                     else:
@@ -1060,15 +1059,14 @@ class Node:
             db.session.rollback()
         
         return confirmations, total_nodes
-
+    
     async def receive_block(self, sender_id, block_dict):
         app.logger.debug(f"Node {self.node_id} receiving block #{block_dict['index']} from node {sender_id}")
         
         try:
-            # Формируем объект блока
             timestamp = datetime.fromisoformat(block_dict['timestamp'].replace('Z', '+00:00'))
             transactions = [
-                {k: v for k, v in tx.items() if k != 'transaction_hash'}  # Исключаем transaction_hash
+                {k: v for k, v in tx.items() if k != 'transaction_hash'}
                 for tx in block_dict['transactions']
             ]
             block = Block(
@@ -1078,7 +1076,6 @@ class Node:
                 previous_hash=block_dict['previous_hash']
             )
             
-            # Проверяем хэш блока
             calculated_hash = block.calculate_hash()
             if calculated_hash != block_dict['hash']:
                 app.logger.error(
@@ -1087,7 +1084,6 @@ class Node:
                 )
                 return False, f"Invalid block: hash mismatch: calculated {calculated_hash}, got {block_dict['hash']}"
             
-            # Проверяем previous_hash
             with app.app_context():
                 previous_block = db.session.query(BlockchainBlock).filter_by(
                     index=block_dict['index'] - 1, node_id=self.node_id
@@ -1100,7 +1096,6 @@ class Node:
                     )
                     return False, f"Invalid previous_hash: expected {expected_previous_hash}, got {block_dict['previous_hash']}"
             
-            # Проверяем наличие блока
             with app.app_context():
                 existing_block = db.session.query(BlockchainBlock).filter_by(
                     index=block_dict['index'], node_id=self.node_id
@@ -1116,17 +1111,69 @@ class Node:
                         )
                         return False, "Block exists with different hash"
             
-            # Сохраняем блок
+            # Создаем запись ПриходРасход для каждой транзакции
             with app.app_context():
+                for tx in block_dict['transactions']:
+                    transaction_hash = tx.get('transaction_hash')
+                    if not transaction_hash:
+                        app.logger.error(f"Node {self.node_id}: Missing transaction_hash in transaction")
+                        return False, "Missing transaction_hash"
+                    
+                    existing_record = ПриходРасход.query.filter_by(TransactionHash=transaction_hash).first()
+                    if existing_record:
+                        app.logger.info(f"Node {self.node_id}: ПриходРасход record with hash {transaction_hash} already exists")
+                        continue
+                    
+                    required_fields = ['ДокументID', 'Единица_ИзмеренияID', 'Количество', 'СкладОтправительID', 'СкладПолучательID', 'ТоварID', 'user_id', 'timestamp']
+                    if not all(field in tx for field in required_fields):
+                        app.logger.error(f"Node {self.node_id}: Missing required fields in transaction")
+                        return False, "Missing required fields in transaction"
+                    
+                    new_record = ПриходРасход(
+                        СкладОтправительID=tx['СкладОтправительID'],
+                        СкладПолучательID=tx['СкладПолучательID'],
+                        ДокументID=tx['ДокументID'],
+                        ТоварID=tx['ТоварID'],
+                        Количество=tx['Количество'],
+                        Единица_ИзмеренияID=tx['Единица_ИзмеренияID'],
+                        TransactionHash=transaction_hash,
+                        Timestamp=datetime.fromisoformat(tx['timestamp'].replace('Z', '+00:00')),
+                        user_id=tx['user_id']
+                    )
+                    db.session.add(new_record)
+                    
+                    # Обновляем запасы
+                    success, message = update_запасы(
+                        tx['СкладПолучательID'],
+                        tx['ТоварID'],
+                        tx['Количество']
+                    )
+                    if not success:
+                        app.logger.error(f"Node {self.node_id}: Failed to update receiver inventory: {message}")
+                        db.session.rollback()
+                        return False, message
+                    
+                    if tx['СкладОтправительID'] != tx['СкладПолучательID']:
+                        success, message = update_запасы(
+                            tx['СкладОтправительID'],
+                            tx['ТоварID'],
+                            -tx['Количество']
+                        )
+                        if not success:
+                            app.logger.error(f"Node {self.node_id}: Failed to update sender inventory: {message}")
+                            db.session.rollback()
+                            return False, message
+                
+                # Сохраняем блок
                 new_block = BlockchainBlock(
                     index=block_dict['index'],
                     timestamp=timestamp,
-                    transactions=json.dumps(block_dict['transactions'], ensure_ascii=False),  # Сохраняем с transaction_hash
+                    transactions=json.dumps(block_dict['transactions'], ensure_ascii=False),
                     previous_hash=block_dict['previous_hash'],
                     hash=block_dict['hash'],
                     node_id=self.node_id,
                     confirming_node_id=sender_id,
-                    confirmed=False  # Ожидаем подтверждений
+                    confirmed=False
                 )
                 db.session.add(new_block)
                 db.session.commit()
@@ -1135,9 +1182,10 @@ class Node:
             return True, "Block accepted"
         
         except Exception as e:
-            app.logger.error(f"Node {self.node_id}: Error processing block #{block_dict['index']}: {str(e)}")
+            db.session.rollback()
+            app.logger.error(f"Node {self.node_id}: Failed to process block #{block_dict['index']}: {str(e)}")
             return False, str(e)
-
+        
     def rollback_unconfirmed_blocks(self):
         with app.app_context():
             unconfirmed_blocks = db.session.query(BlockchainBlock).filter_by(node_id=self.node_id, confirmed=False).all()
@@ -1345,7 +1393,6 @@ class Node:
                     previous_hash = last_block.hash if last_block else "0"
                     new_index = (last_block.index + 1) if last_block else 0
                     
-                    # Формируем транзакции для блока (без transaction_hash)
                     block_transactions = [{
                         k: v for k, v in transaction_data.items()
                         if k in required_fields
@@ -1369,11 +1416,22 @@ class Node:
                         confirmed=False
                     )
                     
+                    # Добавляем запись и блок в сессию
                     db.session.add(new_record)
+                    db.session.add(block_db)
+                    
+                    # Проверяем, не привязан ли объект к другой сессии
+                    if new_record in db.session:
+                        app.logger.debug(f"Node {self.node_id}: ПриходРасход record is in session")
+                    else:
+                        app.logger.error(f"Node {self.node_id}: ПриходРасход record failed to add to session")
+                        return False, "Failed to add ПриходРасход record to session"
+                    
                     confirmations, total_nodes = await self.broadcast_new_block(block, new_record, block_db)
                     
                     if confirmations < (2 * ((total_nodes - 1) // 3) + 1):
                         db.session.rollback()
+                        app.logger.error(f"Node {self.node_id}: Consensus not reached: {confirmations}/{total_nodes}")
                         return False, f"Consensus not reached: {confirmations}/{total_nodes}"
                     
                     db.session.commit()
