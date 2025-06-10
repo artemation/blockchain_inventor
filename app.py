@@ -838,7 +838,7 @@ class Node:
                         async with session.get(url) as response:
                             if response.status != 200:
                                 current_app.logger.error(
-                                    f"Node {self.node_id}: Failed to fetch block #{index} from node {source_node_id}: status={response.status}"
+                                    f"Node {self.node_id}: Failed to fetch block #{index} from node {source_node_id}: status={response.status}")
                                 success = False
                                 break
                             block_data = await response.json()
