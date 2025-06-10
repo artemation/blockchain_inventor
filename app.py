@@ -977,7 +977,7 @@ class Node:
             'timestamp': block.timestamp.isoformat(),
             'transactions': [{
                 **tx,
-                'transaction_hash': transaction_record.TransactionHash  # Добавляем хеш для передачи, но он исключается при хэшировании
+                'transaction_hash': transaction_record.TransactionHash
             } for tx in block.transactions],
             'previous_hash': block.previous_hash,
             'hash': block.hash
@@ -997,7 +997,7 @@ class Node:
         responses = await asyncio.gather(*tasks, return_exceptions=True)
         for node_id, response in responses:
             if isinstance(response, Exception):
-                app.logger.error(f"Error sending to node {node_id}: {response}")
+                current_app.logger.error(f"Error sending to node {node_id}: {response}")
                 continue
             try:
                 status, body = response
@@ -1025,11 +1025,11 @@ class Node:
                     existing_block = db.session.query(BlockchainBlock).filter_by(
                         hash=block_db.hash, node_id=self.node_id
                     ).first()
-                    if not existing_block:
+                    if not existing_block and block_db not in db.session:
                         db.session.add(block_db)
-                        current_app.logger.info(f"Block #{block.index} created and committed")
+                        current_app.logger.info(f"Block #{block.index} created and added to session")
                     else:
-                        current_app.logger.info(f"Block #{block.index} already exists, updating confirmations")
+                        current_app.logger.info(f"Block #{block.index} already exists or in session, updating confirmations")
                     
                     block_db.confirmations = json.dumps(confirmations_list)
                     block_db.confirmed = True
@@ -1388,55 +1388,66 @@ class Node:
                         return False, message
                 
                 # Создаем блок
-                with app.app_context():
-                    last_block = db.session.query(BlockchainBlock).filter_by(node_id=self.node_id).order_by(BlockchainBlock.index.desc()).first()
-                    previous_hash = last_block.hash if last_block else "0"
-                    new_index = (last_block.index + 1) if last_block else 0
-                    
-                    block_transactions = [{
-                        k: v for k, v in transaction_data.items()
-                        if k in required_fields
-                    }]
-                    
-                    block = Block(
-                        index=new_index,
-                        timestamp=datetime.now(timezone.utc),
-                        transactions=block_transactions,
-                        previous_hash=previous_hash
-                    )
-                    
-                    block_db = BlockchainBlock(
-                        index=new_index,
-                        timestamp=block.timestamp,
-                        transactions=json.dumps(block_transactions, ensure_ascii=False),
-                        previous_hash=previous_hash,
-                        hash=block.hash,
-                        node_id=self.node_id,
-                        confirming_node_id=self.node_id,
-                        confirmed=False
-                    )
-                    
-                    # Добавляем запись и блок в сессию
-                    db.session.add(new_record)
-                    db.session.add(block_db)
-                    
-                    # Проверяем, не привязан ли объект к другой сессии
-                    if new_record in db.session:
-                        app.logger.debug(f"Node {self.node_id}: ПриходРасход record is in session")
-                    else:
-                        app.logger.error(f"Node {self.node_id}: ПриходРасход record failed to add to session")
-                        return False, "Failed to add ПриходРасход record to session"
-                    
-                    confirmations, total_nodes = await self.broadcast_new_block(block, new_record, block_db)
-                    
-                    if confirmations < (2 * ((total_nodes - 1) // 3) + 1):
-                        db.session.rollback()
-                        app.logger.error(f"Node {self.node_id}: Consensus not reached: {confirmations}/{total_nodes}")
-                        return False, f"Consensus not reached: {confirmations}/{total_nodes}"
-                    
-                    db.session.commit()
-                    app.logger.info(f"Transaction {sequence_number} applied with hash {transaction_hash}")
-                    return True, "Transaction applied successfully"
+                last_block = db.session.query(BlockchainBlock).filter_by(node_id=self.node_id).order_by(BlockchainBlock.index.desc()).first()
+                previous_hash = last_block.hash if last_block else "0"
+                new_index = (last_block.index + 1) if last_block else 0
+                
+                block_transactions = [{
+                    k: v for k, v in transaction_data.items()
+                    if k in required_fields
+                }]
+                
+                block = Block(
+                    index=new_index,
+                    timestamp=datetime.now(timezone.utc),
+                    transactions=block_transactions,
+                    previous_hash=previous_hash
+                )
+                
+                block_db = BlockchainBlock(
+                    index=new_index,
+                    timestamp=block.timestamp,
+                    transactions=json.dumps(block_transactions, ensure_ascii=False),
+                    previous_hash=previous_hash,
+                    hash=block.hash,
+                    node_id=self.node_id,
+                    confirming_node_id=self.node_id,
+                    confirmed=False
+                )
+                
+                # Добавляем запись и блок в сессию
+                db.session.add(new_record)
+                db.session.add(block_db)
+                
+                # Проверяем, что объекты в сессии
+                if new_record in db.session:
+                    app.logger.debug(f"Node {self.node_id}: ПриходРасход record is in session")
+                else:
+                    app.logger.error(f"Node {self.node_id}: ПриходРасход record failed to add to session")
+                    return False, "Failed to add ПриходРасход record to session"
+                
+                if block_db in db.session:
+                    app.logger.debug(f"Node {self.node_id}: BlockchainBlock record is in session")
+                else:
+                    app.logger.error(f"Node {self.node_id}: BlockchainBlock record failed to add to session")
+                    return False, "Failed to add BlockchainBlock record to session"
+                
+                confirmations, total_nodes = await self.broadcast_new_block(block, new_record, block_db)
+                
+                required_confirmations = 2 * ((total_nodes - 1) // 3) + 1
+                if confirmations < required_confirmations:
+                    db.session.rollback()
+                    app.logger.error(f"Node {self.node_id}: Consensus not reached: {confirmations}/{required_confirmations}")
+                    return False, f"Consensus not reached: {confirmations}/{required_confirmations}"
+                
+                db.session.commit()
+                app.logger.info(f"Transaction {sequence_number} applied with hash {transaction_hash}")
+                
+                # Синхронизируем ПриходРасход после успешной транзакции
+                app.logger.info(f"Node {self.node_id}: Starting ПриходРасход records sync after transaction")
+                await self.sync_prihod_rashod()
+                
+                return True, "Transaction applied successfully"
         
         except Exception as e:
             db.session.rollback()
