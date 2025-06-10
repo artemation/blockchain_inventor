@@ -206,27 +206,33 @@ class Block:
         self.hash = self.calculate_hash()
 
     def calculate_hash(self):
+        """Calculate the hash of the block using SHA-256."""
         app.logger.debug(f"Node unknown: Calculating hash for block #{self.index}: previous_hash_length={len(self.previous_hash)}, transactions_types={[type(t) for t in self.transactions]}, transaction_keys={[t.keys() for t in self.transactions]}")
         
-        # Убедимся, что timestamp — объект datetime с временной зоной
+        # Обработка timestamp
         timestamp = self.timestamp
         if isinstance(timestamp, str):
-            timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-        if timezone.is_naive(timestamp):
+            try:
+                timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            except ValueError as e:
+                app.logger.error(f"Node unknown: Invalid timestamp format for block #{self.index}: {timestamp}, error: {str(e)}")
+                raise ValueError(f"Invalid timestamp format: {timestamp}")
+        
+        if timestamp.tzinfo is None:
             timestamp = timestamp.replace(tzinfo=timezone.utc)
         
-        # Создаем копию данных блока
+        # Создание копии данных блока
         block_data = {
             'index': self.index,
-            'timestamp': timestamp.isoformat(),  # Всегда включает временную зону, например, +00:00
+            'timestamp': timestamp.isoformat(),
             'transactions': [
-                {k: v for k, v in tx.items() if k != 'transaction_hash'}  # Исключаем transaction_hash
+                {k: v for k, v in tx.items() if k != 'transaction_hash'}
                 for tx in self.transactions
             ],
-            'previous_hash': self.previous_hash.strip()  # Убираем пробелы
+            'previous_hash': self.previous_hash.strip()
         }
         
-        # Сериализуем с сортировкой ключей и без экранирования UTF-8
+        # Сериализация с сортировкой ключей
         block_string = json.dumps(
             block_data,
             sort_keys=True,
