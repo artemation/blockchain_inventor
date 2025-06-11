@@ -1,21 +1,23 @@
-from sqlalchemy import Column, Date, Float, ForeignKey, Integer, String, Text, Boolean, DateTime
-from sqlalchemy.orm import relationship
+from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
+from sqlalchemy.orm import relationship
 from sqlalchemy.schema import Identity
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 
-db = SQLAlchemy()
+# app = Flask(__name__) # Убедитесь, что у вас есть экземпляр Flask-приложения
+# app.config['SQLALCHEMY_DATABASE_URI'] = '...' # Укажите URI базы данных
+db = SQLAlchemy() # app = app  Удалите app=app если вы инициализируете db вне функции create_app
 
 class User(UserMixin, db.Model):
     __tablename__ = 'users'
 
-    id = Column(Integer, Identity(), primary_key=True)
-    username = Column(String(255), unique=True, nullable=False)
-    password = Column(String(255), nullable=False)
-    is_admin = Column(Boolean, default=False)
-    role = Column(String(50), nullable=False)  # Добавлено
+    id = db.Column(db.Integer, Identity(), primary_key=True)
+    username = db.Column(db.String(255), unique=True, nullable=False)
+    password = db.Column(db.String(255), nullable=False)
+    is_admin = db.Column(db.Boolean, default=False)
+    role = db.Column(db.String(50), nullable=False)  # Добавлено
 
     def __repr__(self):
         return f"<User(id={self.id}, username='{self.username}', role='{self.role}')>"
@@ -23,8 +25,8 @@ class User(UserMixin, db.Model):
 class Единица_измерения(db.Model):
     __tablename__ = 'Единица_измерения'
 
-    Единица_ИзмеренияID = Column(Integer, Identity(), primary_key=True)
-    Единица_Измерения = Column(String(255))
+    Единица_ИзмеренияID = db.Column(db.Integer, Identity(), primary_key=True)
+    Единица_Измерения = db.Column(db.String(255))
 
     def __repr__(self):
         return f"<Единица_измерения(Единица_ИзмеренияID={self.Единица_ИзмеренияID}, Единица_Измерения='{self.Единица_Измерения}')>"
@@ -32,10 +34,10 @@ class Единица_измерения(db.Model):
 class Склады(db.Model):
     __tablename__ = 'Склады'
 
-    СкладID = Column(Integer, Identity(), primary_key=True)
-    Название = Column(String(255))
-    Адрес = Column(String(255))
-    Телефон = Column(String(20))
+    СкладID = db.Column(db.Integer, Identity(), primary_key=True)
+    Название = db.Column(db.String(255))
+    Адрес = db.Column(db.String(255))
+    Телефон = db.Column(db.String(20))
 
     def __repr__(self):
         return f"<Склады(СкладID={self.СкладID}, Название='{self.Название}')>"
@@ -43,8 +45,8 @@ class Склады(db.Model):
 class Тип_документа(db.Model):
     __tablename__ = 'Тип_документа'
 
-    ДокументID = Column(Integer, Identity(), primary_key=True)
-    Тип_документа = Column(String(255))
+    ДокументID = db.Column(db.Integer, Identity(), primary_key=True)
+    Тип_документа = db.Column(db.String(255))
 
     def __repr__(self):
         return f"<Тип_документа(ДокументID={self.ДокументID}, Тип_документа='{self.Тип_документа}')>"
@@ -52,10 +54,10 @@ class Тип_документа(db.Model):
 class Товары(db.Model):
     __tablename__ = 'Товары'
 
-    ТоварID = Column(Integer, Identity(), primary_key=True)
-    Наименование = Column(String(255))
-    Описание = Column(Text)
-    Единица_ИзмеренияID = Column(ForeignKey('Единица_измерения.Единица_ИзмеренияID'))
+    ТоварID = db.Column(db.Integer, Identity(), primary_key=True)
+    Наименование = db.Column(db.String(255))
+    Описание = db.Column(db.Text)
+    Единица_ИзмеренияID = db.Column(db.ForeignKey('Единица_измерения.Единица_ИзмеренияID'))
     image_path = db.Column(db.String(255))
 
     Единица_измерения = relationship('Единица_измерения', foreign_keys=[Единица_ИзмеренияID])
@@ -66,12 +68,12 @@ class Товары(db.Model):
 class Запасы(db.Model):
     __tablename__ = 'Запасы'
 
-    ЗапасID = Column(Integer, Identity(), primary_key=True) #Убедитесь, что Identity работает корректно
-    ТоварID = Column(ForeignKey('Товары.ТоварID'))
-    СкладID = Column(ForeignKey('Склады.СкладID'))
-    Количество = Column(Float)
-    Дата_обновления = Column(Date)
-    Единица_ИзмеренияID = Column(ForeignKey('Единица_измерения.Единица_ИзмеренияID'))
+    ЗапасID = db.Column(db.Integer, Identity(), primary_key=True) #Убедитесь, что Identity работает корректно
+    ТоварID = db.Column(db.ForeignKey('Товары.ТоварID'))
+    СкладID = db.Column(db.ForeignKey('Склады.СкладID'))
+    Количество = db.Column(db.Float)
+    Дата_обновления = db.Column(db.Date)
+    Единица_ИзмеренияID = db.Column(db.ForeignKey('Единица_измерения.Единица_ИзмеренияID'))
 
     Единица_измерения = relationship('Единица_измерения')
     Склады = relationship('Склады')
@@ -83,15 +85,15 @@ class Запасы(db.Model):
 class ПриходРасход(db.Model):
     __tablename__ = 'ПриходРасход'
 
-    ПриходРасходID = Column(Integer, Identity(), primary_key=True)
-    СкладОтправительID = Column(ForeignKey('Склады.СкладID'))
-    СкладПолучательID = Column(ForeignKey('Склады.СкладID'))
-    ДокументID = Column(ForeignKey('Тип_документа.ДокументID'))
-    ТоварID = Column(ForeignKey('Товары.ТоварID'))
-    Количество = Column(Float)
-    Единица_ИзмеренияID = Column(ForeignKey('Единица_измерения.Единица_ИзмеренияID'))
-    TransactionHash = Column(String)
-    Timestamp = Column(DateTime(timezone=False))
+    ПриходРасходID = db.Column(db.Integer, Identity(), primary_key=True)
+    СкладОтправительID = db.Column(db.ForeignKey('Склады.СкладID'))
+    СкладПолучательID = db.Column(db.ForeignKey('Склады.СкладID'))
+    ДокументID = db.Column(db.ForeignKey('Тип_документа.ДокументID'))
+    ТоварID = db.Column(db.ForeignKey('Товары.ТоварID'))
+    Количество = db.Column(db.Float)
+    Единица_ИзмеренияID = db.Column(db.ForeignKey('Единица_измерения.Единица_ИзмеренияID'))
+    TransactionHash = db.Column(db.String(64), unique=True, nullable=False)  # <- Вот эта строка изменена
+    Timestamp = db.Column(db.DateTime(timezone=False))
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
 
     user = db.relationship('User', backref='transactions')
@@ -103,16 +105,16 @@ class ПриходРасход(db.Model):
 
     def __repr__(self):
         return f"<ПриходРасход(ПриходРасходID={self.ПриходРасходID}, СкладОтправительID={self.СкладОтправительID}, СкладПолучательID={self.СкладПолучательID}, ТоварID={self.ТоварID}, Количество={self.Количество})>"
-
+        
 class Invitation(db.Model):
     __tablename__ = 'invitations'
 
-    id = Column(Integer, Identity(), primary_key=True)
-    code = Column(String(255), unique=True, nullable=False)
-    email = Column(String(255), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=True)
-    used_at = Column(DateTime, nullable=True)
+    id = db.Column(db.Integer, Identity(), primary_key=True)
+    code = db.Column(db.String(255), unique=True, nullable=False)
+    email = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    used_at = db.Column(db.DateTime, nullable=True)
 
     user = relationship('User', foreign_keys=[user_id])
 
@@ -133,6 +135,9 @@ class BlockchainBlock(db.Model):
     confirmed = db.Column(db.Boolean, default=False)
     confirming_node_id = db.Column(db.Integer, nullable=False)  # ID узла, подтвердившего блок
     confirmations = db.Column(db.Text)
+
+    def __repr__(self):
+        return f'<Block {self.index}>'
 
     def __repr__(self):
         return f'<Block {self.index}>'
