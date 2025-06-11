@@ -126,7 +126,7 @@ def get_block(block_index):
                 transactions=json.loads(block.transactions),
                 previous_hash=block.previous_hash
             )
-            calculated_hash = block_obj.calculate_hash()  # Это вызовет отладочные логи
+            calculated_hash = block_obj.calculate_hash()
             app.logger.debug(f"Node {NODE_ID}: Block #{block_index} fetched, calculated_hash={calculated_hash}, stored_hash={block.hash}")
 
             return jsonify({
@@ -134,10 +134,13 @@ def get_block(block_index):
                 'timestamp': block.timestamp.isoformat(),
                 'transactions': json.loads(block.transactions),
                 'previous_hash': block.previous_hash,
-                'hash': block.hash
+                'hash': block.hash,
+                'confirming_node_id': block.confirming_node_id,
+                'confirmed': block.confirmed,
+                'confirmations': json.loads(block.confirmations) if block.confirmations else []  # Парсим JSON-строку
             }), 200
-    except Exception as e:
-        app.logger.error(f"Node {NODE_ID}: Error in get_block for block #{block_index}: {str(e)}")
+    except Exception:
+        app.logger.error(f"Error in get_block for block #{block_index}: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/admin', methods=['GET'])
@@ -207,6 +210,14 @@ class Block:
 
     def calculate_hash(self):
         """Calculate the hash of the block using SHA-256."""
+        # Проверка типов
+        if not isinstance(self.previous_hash, str):
+            app.logger.error(f"Node unknown: Invalid previous_hash type for block #{self.index}: got {type(self.previous_hash)}")
+            raise ValueError(f"previous_hash must be a string, got {type(self.previous_hash)}")
+        if not isinstance(self.transactions, list):
+            app.logger.error(f"Node unknown: Invalid transactions type for block #{self.index}: got {type(self.transactions)}")
+            raise ValueError(f"transactions must be a list, got {type(self.transactions)}")
+        
         app.logger.debug(f"Node unknown: Calculating hash for block #{self.index}: previous_hash_length={len(self.previous_hash)}, transactions_types={[type(t) for t in self.transactions]}, transaction_keys={[t.keys() for t in self.transactions]}")
         
         # Обработка timestamp
@@ -249,7 +260,8 @@ class Block:
             'timestamp': self.timestamp.isoformat(),
             'transactions': self.transactions,
             'previous_hash': self.previous_hash,
-            'hash': self.hash
+            'hash': self.hash,
+            'confirmations': getattr(self, 'confirmations', [])  # Добавляем confirmations
         }
 
     @staticmethod
@@ -276,6 +288,7 @@ class Node:
     def __init__(self, node_id, nodes, host, port):
         self.node_id = node_id
         self.nodes = nodes
+        self.prihod_rashod_lock = asyncio.Lock()
         self.host = host
         self.port = port
         self.sequence_number = 0
@@ -901,7 +914,7 @@ class Node:
                                 node_id=self.node_id,
                                 confirming_node_id=block_data.get('confirming_node_id', self.node_id),
                                 confirmed=block_data.get('confirmed', True),
-                                confirmations=block_data.get('confirmations', 0)
+                                confirmations=json.dumps(block_data.get('confirmations', []))
                             )
                             db.session.add(new_block)
                             db.session.commit()
@@ -1080,96 +1093,98 @@ class Node:
 
     async def sync_prihod_rashod(self):
         """Синхронизирует записи ПриходРасход и обновляет Запасы."""
-        app.logger.info(f"Node {self.node_id}: Starting ПриходРасход records sync...")
-        headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
-        
-        for node_id, domain in self.nodes.items():
-            if node_id == self.node_id:
-                continue
-            url = f"https://{domain}/get_prihod_rashod"
-            app.logger.debug(f"Node {self.node_id}: Requesting ПриходРасход records from node {node_id} at {url}")
+        async with self.prihod_rashod_lock:  # Используем блокировку
+            app.logger.info(f"Node {self.node_id}: Starting ПриходРасход records sync...")
+            headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
             
-            try:
-                async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=60)) as session:
-                    async with session.get(url) as response:
-                        app.logger.debug(f"Node {self.node_id}: Response from node {node_id}: status={response.status}")
-                        if response.status != 200:
-                            app.logger.error(f"Node {self.node_id}: Failed to fetch records from node {node_id}: status={response.status}")
-                            continue
-                        records = await response.json()
-                        app.logger.debug(f"Node {self.node_id}: Received {len(records)} records from node {node_id}")
-                        
-                        added_count = 0
-                        with app.app_context():
-                            for record in records:
-                                required_fields = [
-                                    'СкладОтправительID', 'СкладПолучательID', 'ДокументID', 'ТоварID',
-                                    'Количество', 'Единица_ИзмеренияID', 'TransactionHash', 'user_id', 'Timestamp'
-                                ]
-                                if not all(field in record for field in required_fields):
-                                    app.logger.warning(f"Node {self.node_id}: Skipping invalid record from node {node_id}: {record}")
-                                    continue
-                                
-                                # Проверка на дубликат
-                                existing_record = ПриходРасход.query.filter_by(TransactionHash=record['TransactionHash']).first()
-                                if existing_record:
-                                    app.logger.debug(f"Node {self.node_id}: Skipping duplicate record with TransactionHash {record['TransactionHash']}")
-                                    continue
-                                
-                                try:
-                                    # Добавление записи
-                                    new_record = ПриходРасход(
-                                        СкладОтправительID=record['СкладОтправительID'],
-                                        СкладПолучательID=record['СкладПолучательID'],
-                                        ДокументID=record['ДокументID'],
-                                        ТоварID=record['ТоварID'],
-                                        Количество=record['Количество'],
-                                        Единица_ИзмеренияID=record['Единица_ИзмеренияID'],
-                                        TransactionHash=record['TransactionHash'],
-                                        Timestamp=datetime.fromisoformat(record['Timestamp'].replace('Z', '+00:00')),
-                                        user_id=record['user_id']
-                                    )
-                                    db.session.add(new_record)
-                                    
-                                    # Обновление Запасы
-                                    if new_record.СкладОтправительID:
-                                        success, message = update_запасы(
-                                            new_record.СкладОтправительID, new_record.ТоварID, -new_record.Количество
-                                        )
-                                        if not success:
-                                            app.logger.error(f"Node {self.node_id}: Failed to update Запасы for СкладОтправительID: {message}")
-                                            db.session.rollback()
-                                            continue
-                                        app.logger.info(f"Node {self.node_id}: {message}")
-                                    
-                                    if new_record.СкладПолучательID:
-                                        success, message = update_запасы(
-                                            new_record.СкладПолучательID, new_record.ТоварID, new_record.Количество
-                                        )
-                                        if not success:
-                                            app.logger.error(f"Node {self.node_id}: Failed to update Запасы for СкладПолучательID: {message}")
-                                            db.session.rollback()
-                                            continue
-                                        app.logger.info(f"Node {self.node_id}: {message}")
-                                    
-                                    added_count += 1
-                                except Exception as e:
-                                    app.logger.error(f"Node {self.node_id}: Error adding record {record['TransactionHash']} from node {node_id}: {str(e)}")
-                                    db.session.rollback()
-                                    continue
+            for node_id, domain in self.nodes.items():
+                if node_id == self.node_id:
+                    continue
+                url = f"https://{domain}/get_prihod_rashod"
+                app.logger.debug(f"Node {self.node_id}: Requesting ПриходРасход records from node {node_id} at {url}")
+                
+                try:
+                    async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=60)) as session:
+                        async with session.get(url) as response:
+                            app.logger.debug(f"Node {self.node_id}: Response from node {node_id}: status={response.status}")
+                            if response.status != 200:
+                                app.logger.error(f"Node {self.node_id}: Failed to fetch records from node {node_id}: status={response.status}")
+                                continue
+                            records = await response.json()
+                            app.logger.debug(f"Node {self.node_id}: Received {len(records)} records from node {node_id}")
                             
-                            if added_count > 0:
-                                db.session.commit()
+                            added_count = 0
+                            with app.app_context():
+                                for record in records:
+                                    required_fields = [
+                                        'СкладОтправительID', 'СкладПолучательID', 'ДокументID', 'ТоварID',
+                                        'Количество', 'Единица_ИзмеренияID', 'TransactionHash', 'user_id', 'Timestamp'
+                                    ]
+                                    if not all(field in record for field in required_fields):
+                                        app.logger.warning(f"Node {self.node_id}: Skipping invalid record from node {node_id}: {record}")
+                                        continue
+                                    
+                                    # Проверка на дубликат
+                                    existing_record = ПриходРасход.query.filter_by(TransactionHash=record['TransactionHash']).first()
+                                    if existing_record:
+                                        app.logger.debug(f"Node {self.node_id}: Skipping duplicate record with TransactionHash {record['TransactionHash']}")
+                                        continue
+                                    
+                                    try:
+                                        # Добавление записи
+                                        new_record = ПриходРасход(
+                                            СкладОтправительID=record['СкладОтправительID'],
+                                            СкладПолучательID=record['СкладПолучательID'],
+                                            ДокументID=record['ДокументID'],
+                                            ТоварID=record['ТоварID'],
+                                            Количество=record['Количество'],
+                                            Единица_ИзмеренияID=record['Единица_ИзмеренияID'],
+                                            TransactionHash=record['TransactionHash'],
+                                            Timestamp=datetime.fromisoformat(record['Timestamp'].replace('Z', '+00:00')),
+                                            user_id=record['user_id']
+                                        )
+                                        db.session.add(new_record)
+                                        
+                                        # Обновление Запасы
+                                        if new_record.СкладОтправительID:
+                                            success, message = update_запасы(
+                                                new_record.СкладОтправительID, new_record.ТоварID, -new_record.Количество
+                                            )
+                                            if not success:
+                                                app.logger.error(f"Node {self.node_id}: Failed to update Запасы for СкладОтправительID: {message}")
+                                                db.session.rollback()
+                                                continue
+                                            app.logger.info(f"Node {self.node_id}: {message}")
+                                        
+                                        if new_record.СкладПолучательID:
+                                            success, message = update_запасы(
+                                                new_record.СкладПолучательID, new_record.ТоварID, new_record.Количество
+                                            )
+                                            if not success:
+                                                app.logger.error(f"Node {self.node_id}: Failed to update Запасы for СкладПолучательID: {message}")
+                                                db.session.rollback()
+                                                continue
+                                            app.logger.info(f"Node {self.node_id}: {message}")
+                                        
+                                        db.session.commit()  # Коммит для каждой записи
+                                        added_count += 1
+                                    except IntegrityError:
+                                        app.logger.debug(f"Node {self.node_id}: Duplicate record with TransactionHash {record['TransactionHash']} skipped due to unique constraint")
+                                        db.session.rollback()
+                                        continue
+                                    except Exception as e:
+                                        app.logger.error(f"Node {self.node_id}: Error adding record {record['TransactionHash']} from node {node_id}: {str(e)}")
+                                        db.session.rollback()
+                                        continue
+                                
                                 app.logger.info(f"Node {self.node_id}: Added {added_count} records from node {node_id}")
-                            else:
-                                app.logger.info(f"Node {self.node_id}: Added 0 records from node {node_id}")
+                
+                except Exception as e:
+                    app.logger.error(f"Node {self.node_id}: Error syncing ПриходРасход from node {node_id}: {str(e)}")
+                    with app.app_context():
+                        db.session.rollback()
             
-            except Exception as e:
-                app.logger.error(f"Node {self.node_id}: Error syncing ПриходРасход from node {node_id}: {str(e)}")
-                with app.app_context():
-                    db.session.rollback()
-        
-        app.logger.info(f"Node {self.node_id}: Completed ПриходРасход records sync")
+            app.logger.info(f"Node {self.node_id}: Completed ПриходРасход records sync")
     
     async def receive_block(self, sender_id, block_dict):
         app.logger.debug(f"Node {self.node_id} receiving block #{block_dict['index']} from node {sender_id}")
