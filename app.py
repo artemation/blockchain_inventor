@@ -12,6 +12,7 @@ from logging.handlers import RotatingFileHandler
 from logging import Formatter, StreamHandler, DEBUG
 import json
 import sqlalchemy
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import text, select, func
 from flask_wtf.csrf import CSRFProtect
 import threading
@@ -1093,7 +1094,7 @@ class Node:
 
     async def sync_prihod_rashod(self):
         """Синхронизирует записи ПриходРасход и обновляет Запасы."""
-        async with self.prihod_rashod_lock:  # Используем блокировку
+        async with self.prihod_rashod_lock:
             app.logger.info(f"Node {self.node_id}: Starting ПриходРасход records sync...")
             headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
             
@@ -1146,27 +1147,31 @@ class Node:
                                         db.session.add(new_record)
                                         
                                         # Обновление Запасы
-                                        if new_record.СкладОтправительID:
-                                            success, message = update_запасы(
-                                                new_record.СкладОтправительID, new_record.ТоварID, -new_record.Количество
-                                            )
-                                            if not success:
-                                                app.logger.error(f"Node {self.node_id}: Failed to update Запасы for СкладОтправительID: {message}")
-                                                db.session.rollback()
-                                                continue
-                                            app.logger.info(f"Node {self.node_id}: {message}")
+                                        if new_record.СкладОтправительID and new_record.СкладПолучательID:
+                                            if new_record.СкладОтправительID != new_record.СкладПолучательID:
+                                                # Разные склады: обновляем оба
+                                                success, message = update_запасы(
+                                                    new_record.СкладОтправительID, new_record.ТоварID, -new_record.Количество
+                                                )
+                                                if not success:
+                                                    app.logger.error(f"Node {self.node_id}: Failed to update Запасы for СкладОтправительID: {message}")
+                                                    db.session.rollback()
+                                                    continue
+                                                app.logger.info(f"Node {self.node_id}: {message}")
+                                                
+                                                success, message = update_запасы(
+                                                    new_record.СкладПолучательID, new_record.ТоварID, new_record.Количество
+                                                )
+                                                if not success:
+                                                    app.logger.error(f"Node {self.node_id}: Failed to update Запасы for СкладПолучательID: {message}")
+                                                    db.session.rollback()
+                                                    continue
+                                                app.logger.info(f"Node {self.node_id}: {message}")
+                                            else:
+                                                # Совпадающие склады: пропускаем обновление
+                                                app.logger.info(f"Node {self.node_id}: Skipping stock update for TransactionHash {record['TransactionHash']} as СкладОтправительID equals СкладПолучательID")
                                         
-                                        if new_record.СкладПолучательID:
-                                            success, message = update_запасы(
-                                                new_record.СкладПолучательID, new_record.ТоварID, new_record.Количество
-                                            )
-                                            if not success:
-                                                app.logger.error(f"Node {self.node_id}: Failed to update Запасы for СкладПолучательID: {message}")
-                                                db.session.rollback()
-                                                continue
-                                            app.logger.info(f"Node {self.node_id}: {message}")
-                                        
-                                        db.session.commit()  # Коммит для каждой записи
+                                        db.session.commit()
                                         added_count += 1
                                     except IntegrityError:
                                         app.logger.debug(f"Node {self.node_id}: Duplicate record with TransactionHash {record['TransactionHash']} skipped due to unique constraint")
