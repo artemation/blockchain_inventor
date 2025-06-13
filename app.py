@@ -2313,7 +2313,6 @@ def admin_create_invitation():
 def check_data_integrity(record_id, transaction_data=None):
     """Проверяет целостность данных транзакции, включая временные метки"""
     try:
-        # Получаем запись из базы данных
         record = ПриходРасход.query.get(record_id)
         if not record:
             app.logger.error(f"Record with ID {record_id} not found")
@@ -2323,7 +2322,6 @@ def check_data_integrity(record_id, transaction_data=None):
                 'details': f"Запись с ID {record_id} не существует в базе данных"
             }
 
-        # Проверяем наличие хэша транзакции
         if not record.TransactionHash:
             app.logger.warning(f"Record {record_id} has no transaction hash")
             return {
@@ -2332,46 +2330,48 @@ def check_data_integrity(record_id, transaction_data=None):
                 'details': "Запись не была подтверждена в блокчейне"
             }
 
-        # Нормализация временной метки из записи
         def get_normalized_timestamp(ts):
+            """Нормализует временную метку к формату ISO без микросекунд"""
             if ts is None:
                 return None
             if isinstance(ts, str):
                 try:
-                    # Пробуем распарсить строку в datetime
-                    dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                    # Пробуем парсить формат базы данных (YYYY-MM-DD HH:MM:SS.ffffff)
+                    dt = datetime.strptime(ts.split('.')[0], '%Y-%m-%d %H:%M:%S')
+                    dt = dt.replace(tzinfo=timezone.utc)
                     return dt.isoformat()
                 except ValueError:
-                    # Если не получается распарсить, возвращаем как есть
-                    return ts
+                    try:
+                        # Пробуем ISO-формат (YYYY-MM-DDTHH:MM:SS+00:00 или Z)
+                        dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                        return dt.replace(microsecond=0).isoformat()
+                    except ValueError:
+                        app.logger.warning(f"Invalid timestamp format: {ts}")
+                        return ts
             elif hasattr(ts, 'isoformat'):
-                return ts.isoformat()
+                # Если это datetime объект, приводим к ISO без микросекунд
+                return ts.replace(microsecond=0).astimezone(timezone.utc).isoformat()
             return str(ts)
 
         record_timestamp = get_normalized_timestamp(record.Timestamp)
 
-        # Формируем данные для проверки
+        # Формируем данные для проверки, сохраняя типы как в базе
         check_data = {
-            'ДокументID': int(record.ДокументID),
-            'Единица_ИзмеренияID': int(record.Единица_ИзмеренияID),
-            'Количество': float(record.Количество),
-            'СкладОтправительID': int(record.СкладОтправительID),
-            'СкладПолучательID': int(record.СкладПолучательID),
-            'ТоварID': int(record.ТоварID),
-            'user_id': int(record.user_id),
-            'timestamp': record_timestamp  # Используем нормализованную метку
+            'ДокументID': record.ДокументID,
+            'Единица_ИзмеренияID': record.Единица_ИзмеренияID,
+            'Количество': record.Количество,
+            'СкладОтправительID': record.СкладОтправительID,
+            'СкладПолучательID': record.СкладПолучательID,
+            'ТоварID': record.ТоварID,
+            'user_id': record.user_id,
+            'timestamp': record_timestamp
         }
 
-        # Генерируем хэш для проверки
-        check_string = json.dumps(
-            check_data,
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(',', ':')
-        )
+        # Сериализуем с минимальными параметрами, как в apply_transaction
+        check_string = json.dumps(check_data, sort_keys=True)
+        app.logger.debug(f"Data for hashing in check_data_integrity: {check_string}")
         computed_hash = hashlib.sha256(check_string.encode('utf-8')).hexdigest()
 
-        # Сравниваем хэши
         if computed_hash == record.TransactionHash:
             app.logger.info(f"Integrity check passed for record {record_id}")
             return {
@@ -2383,47 +2383,14 @@ def check_data_integrity(record_id, transaction_data=None):
                 'timestamp_used': record_timestamp
             }
 
-        # Дополнительная проверка: возможно timestamp был в другом формате
-        alternative_hashes = []
-        if record_timestamp:
-            # Вариант 1: Заменяем 'T' на пробел
-            alt_timestamp1 = record_timestamp.replace('T', ' ')
-            alt_data1 = {**check_data, 'timestamp': alt_timestamp1}
-            alt_hash1 = hashlib.sha256(
-                json.dumps(alt_data1, sort_keys=True, ensure_ascii=False).encode('utf-8')
-            ).hexdigest()
-            alternative_hashes.append(alt_hash1)
-
-            # Вариант 2: Удаляем микросекунды
-            if '.' in record_timestamp:
-                alt_timestamp2 = record_timestamp.split('.')[0] + 'Z'
-                alt_data2 = {**check_data, 'timestamp': alt_timestamp2}
-                alt_hash2 = hashlib.sha256(
-                    json.dumps(alt_data2, sort_keys=True, ensure_ascii=False).encode('utf-8')
-                ).hexdigest()
-                alternative_hashes.append(alt_hash2)
-
-        # Проверяем альтернативные варианты хэшей
-        for alt_hash in alternative_hashes:
-            if alt_hash == record.TransactionHash:
-                app.logger.info(f"Integrity check passed with alternative timestamp format for record {record_id}")
-                return {
-                    'success': True,
-                    'message': "Целостность подтверждена (альтернативный формат времени)",
-                    'details': "Хэш совпал при использовании альтернативного формата временной метки",
-                    'computed_hash': alt_hash,
-                    'stored_hash': record.TransactionHash,
-                    'timestamp_used': alt_timestamp1 if alt_hash == alt_hash1 else alt_timestamp2
-                }
-
-        # Если ни один вариант не подошел
         app.logger.error(f"Integrity check failed for record {record_id}")
         return {
             'success': False,
             'message': "Обнаружены расхождения в данных",
             'details': (
                 f"Вычисленный хэш ({computed_hash}) не совпадает с сохраненным ({record.TransactionHash}).\n"
-                f"Использованные данные: {check_data}"
+                f"Использованные данные: {check_data}\n"
+                f"Сериализованная строка: {check_string}"
             ),
             'computed_hash': computed_hash,
             'stored_hash': record.TransactionHash,
@@ -2435,11 +2402,10 @@ def check_data_integrity(record_id, transaction_data=None):
         app.logger.error(f"Error in integrity check for record {record_id}: {str(e)}", exc_info=True)
         return {
             'success': False,
-            'message': "Ошибка при проверке целостности",
+            'message': "Ошибка при проверки целостности",
             'details': str(e),
             'error_type': type(e).__name__
         }
-
 
 @app.route('/check_integrity/<int:record_id>', methods=['POST'])
 @login_required
