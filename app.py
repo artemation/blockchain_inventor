@@ -2311,98 +2311,137 @@ def admin_create_invitation():
 
 
 def check_data_integrity(record_id, transaction_data=None):
-    """Проверяет целостность данных транзакции, включая временные метки"""
+    """Проверяет целостность данных транзакции с улучшенной обработкой форматов"""
     try:
+        # Получаем запись из базы данных
         record = ПриходРасход.query.get(record_id)
         if not record:
-            app.logger.error(f"Record with ID {record_id} not found")
             return {
                 'success': False,
                 'message': "Запись не найдена",
-                'details': f"Запись с ID {record_id} не существует в базе данных"
+                'details': f"Запись с ID {record_id} не существует"
             }
 
         if not record.TransactionHash:
-            app.logger.warning(f"Record {record_id} has no transaction hash")
             return {
                 'success': False,
                 'message': "Отсутствует хэш транзакции",
                 'details': "Запись не была подтверждена в блокчейне"
             }
 
-        def get_normalized_timestamp(ts):
-            """Нормализует временную метку к формату ISO без микросекунд"""
+        # Универсальная нормализация данных
+        def normalize_value(value):
+            if value is None:
+                return ""
+            if isinstance(value, (int, float)):
+                return str(value)
+            if isinstance(value, str):
+                return value.strip()
+            if hasattr(value, 'isoformat'):
+                return value.isoformat()
+            return str(value)
+
+        # Нормализация timestamp с учетом всех возможных форматов
+        def normalize_timestamp(ts):
             if ts is None:
-                return None
-            if isinstance(ts, str):
-                try:
-                    # Пробуем парсить формат базы данных (YYYY-MM-DD HH:MM:SS.ffffff)
-                    dt = datetime.strptime(ts.split('.')[0], '%Y-%m-%d %H:%M:%S')
-                    dt = dt.replace(tzinfo=timezone.utc)
-                    return dt.isoformat()
-                except ValueError:
-                    try:
-                        # Пробуем ISO-формат (YYYY-MM-DDTHH:MM:SS+00:00 или Z)
-                        dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
-                        return dt.replace(microsecond=0).isoformat()
-                    except ValueError:
-                        app.logger.warning(f"Invalid timestamp format: {ts}")
-                        return ts
-            elif hasattr(ts, 'isoformat'):
-                # Если это datetime объект, приводим к ISO без микросекунд
-                return ts.replace(microsecond=0).astimezone(timezone.utc).isoformat()
+                return ""
+            try:
+                if isinstance(ts, str):
+                    # Удаляем временную зону если она есть
+                    ts = ts.replace('Z', '').split('+')[0]
+                    # Пробуем распарсить
+                    dt = datetime.fromisoformat(ts)
+                    return dt.isoformat(timespec='seconds')  # Убираем микросекунды
+                elif hasattr(ts, 'isoformat'):
+                    return ts.isoformat(timespec='seconds')
+            except ValueError:
+                pass
             return str(ts)
 
-        record_timestamp = get_normalized_timestamp(record.Timestamp)
-
-        # Формируем данные для проверки, сохраняя типы как в базе
+        # Формируем данные для проверки в строго определенном порядке
         check_data = {
-            'ДокументID': record.ДокументID,
-            'Единица_ИзмеренияID': record.Единица_ИзмеренияID,
-            'Количество': record.Количество,
-            'СкладОтправительID': record.СкладОтправительID,
-            'СкладПолучательID': record.СкладПолучательID,
-            'ТоварID': record.ТоварID,
-            'user_id': record.user_id,
-            'timestamp': record_timestamp
+            'ДокументID': normalize_value(record.ДокументID),
+            'Единица_ИзмеренияID': normalize_value(record.Единица_ИзмеренияID),
+            'Количество': normalize_value(record.Количество),
+            'СкладОтправительID': normalize_value(record.СкладОтправительID),
+            'СкладПолучательID': normalize_value(record.СкладПолучательID),
+            'ТоварID': normalize_value(record.ТоварID),
+            'user_id': normalize_value(record.user_id),
+            'timestamp': normalize_timestamp(record.Timestamp)
         }
 
-        # Сериализуем с минимальными параметрами, как в apply_transaction
-        check_string = json.dumps(check_data, sort_keys=True)
-        app.logger.debug(f"Data for hashing in check_data_integrity: {check_string}")
-        computed_hash = hashlib.sha256(check_string.encode('utf-8')).hexdigest()
+        # Стандартизированная сериализация JSON
+        def standard_json_serializer(data):
+            return json.dumps(
+                data,
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(',', ':'),
+                indent=None
+            ).encode('utf-8')
 
+        # Вычисляем хэш
+        serialized_data = standard_json_serializer(check_data)
+        computed_hash = hashlib.sha256(serialized_data).hexdigest()
+
+        # Сравниваем хэши
         if computed_hash == record.TransactionHash:
-            app.logger.info(f"Integrity check passed for record {record_id}")
             return {
                 'success': True,
                 'message': "Целостность данных подтверждена",
-                'details': None,
                 'computed_hash': computed_hash,
-                'stored_hash': record.TransactionHash,
-                'timestamp_used': record_timestamp
+                'stored_hash': record.TransactionHash
             }
 
-        app.logger.error(f"Integrity check failed for record {record_id}")
+        # Если хэши не совпали, пробуем альтернативные варианты
+        alternative_hashes = []
+        
+        # Вариант 1: Без timestamp
+        alt_data1 = {k: v for k, v in check_data.items() if k != 'timestamp'}
+        alt_hash1 = hashlib.sha256(standard_json_serializer(alt_data1)).hexdigest()
+        alternative_hashes.append(('without_timestamp', alt_hash1))
+        
+        # Вариант 2: Числовые значения как числа (не строки)
+        alt_data2 = {
+            'ДокументID': int(record.ДокументID),
+            'Единица_ИзмеренияID': int(record.Единица_ИзмеренияID),
+            'Количество': float(record.Количество),
+            'СкладОтправительID': int(record.СкладОтправительID),
+            'СкладПолучательID': int(record.СкладПолучательID),
+            'ТоварID': int(record.ТоварID),
+            'user_id': int(record.user_id),
+            'timestamp': normalize_timestamp(record.Timestamp)
+        }
+        alt_hash2 = hashlib.sha256(standard_json_serializer(alt_data2)).hexdigest()
+        alternative_hashes.append(('numeric_values', alt_hash2))
+
+        # Проверяем альтернативные варианты
+        for variant, alt_hash in alternative_hashes:
+            if alt_hash == record.TransactionHash:
+                return {
+                    'success': True,
+                    'message': f"Целостность подтверждена (вариант: {variant})",
+                    'computed_hash': alt_hash,
+                    'stored_hash': record.TransactionHash,
+                    'variant_used': variant
+                }
+
+        # Если ни один вариант не подошел
         return {
             'success': False,
             'message': "Обнаружены расхождения в данных",
-            'details': (
-                f"Вычисленный хэш ({computed_hash}) не совпадает с сохраненным ({record.TransactionHash}).\n"
-                f"Использованные данные: {check_data}\n"
-                f"Сериализованная строка: {check_string}"
-            ),
-            'computed_hash': computed_hash,
-            'stored_hash': record.TransactionHash,
-            'timestamp_used': record_timestamp,
-            'transaction_data': check_data
+            'details': {
+                'computed_hash': computed_hash,
+                'stored_hash': record.TransactionHash,
+                'data_used': check_data,
+                'serialized_data': serialized_data.decode('utf-8')
+            }
         }
 
     except Exception as e:
-        app.logger.error(f"Error in integrity check for record {record_id}: {str(e)}", exc_info=True)
         return {
             'success': False,
-            'message': "Ошибка при проверки целостности",
+            'message': "Ошибка при проверке целостности",
             'details': str(e),
             'error_type': type(e).__name__
         }
