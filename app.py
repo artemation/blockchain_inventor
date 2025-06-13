@@ -2817,140 +2817,181 @@ def debug_blockchain():
 @login_required
 def verify_block(block_index):
     try:
-        # Получаем все копии этого блока (со всех узлов)
-        blocks = BlockchainBlock.query.filter_by(index=block_index).order_by(BlockchainBlock.node_id).all()
-        
-        if not blocks:
+        # 1. Сначала получаем локальную копию блока
+        local_block = BlockchainBlock.query.filter_by(
+            index=block_index,
+            node_id=NODE_ID
+        ).first()
+
+        if not local_block:
             return jsonify({
                 'success': False,
-                'message': f'Блок с индексом {block_index} не найден ни на одном узле',
+                'message': f'Локальная копия блока #{block_index} не найдена',
                 'block_index': block_index
             }), 404
 
+        # 2. Получаем копии этого блока с других узлов
+        other_blocks = []
+        for node_id, domain in NODE_DOMAINS.items():
+            if node_id == NODE_ID:
+                continue
+
+            try:
+                url = f"https://{domain}/get_block/{block_index}"
+                response = requests.get(url, timeout=3)
+                if response.status_code == 200:
+                    block_data = response.json()
+                    other_blocks.append({
+                        'node_id': node_id,
+                        'data': block_data,
+                        'source': 'remote'
+                    })
+            except Exception as e:
+                app.logger.error(f"Error fetching block from node {node_id}: {str(e)}")
+
+        # 3. Проверяем целостность локального блока
+        local_integrity = verify_block_integrity(local_block)
+        
+        # 4. Сравниваем с другими узлами
+        discrepancies = []
+        consensus_reached = True
+        valid_copies = 1  # Локальная копия изначально считается валидной
+
+        for remote in other_blocks:
+            # Проверяем, совпадает ли хэш с локальным
+            if remote['data']['hash'] != local_block.hash:
+                consensus_reached = False
+                discrepancies.append({
+                    'node_id': remote['node_id'],
+                    'issue': 'hash_mismatch',
+                    'expected_hash': local_block.hash,
+                    'actual_hash': remote['data']['hash']
+                })
+
+            # Проверяем подтверждения
+            remote_confirmations = set(json.loads(remote['data'].get('confirmations', '[]')))
+            local_confirmations = set(json.loads(local_block.confirmations or '[]'))
+            
+            if not remote_confirmations.issuperset(local_confirmations):
+                discrepancies.append({
+                    'node_id': remote['node_id'],
+                    'issue': 'missing_confirmations',
+                    'missing_nodes': list(local_confirmations - remote_confirmations)
+                })
+
+            # Если удалённый блок валиден, увеличиваем счётчик
+            if remote['data'].get('confirmed', False):
+                valid_copies += 1
+
+        # 5. Определяем общий статус
         total_nodes = len(NODE_DOMAINS)
         required_confirmations = (total_nodes - 1) // 3 * 2 + 1
-        results = []
-        hash_groups = {}
+        
+        is_valid = (
+            local_integrity['is_valid'] and 
+            valid_copies >= required_confirmations and
+            consensus_reached
+        )
 
-        # Проверяем каждую копию блока
-        for block in blocks:
-            is_valid = True
-            messages = []
-            confirmations = []
-
-            # Особые правила для генезис-блока (index = 0)
-            if block.index == 0:
-                if block.previous_hash != "0":
-                    is_valid = False
-                    messages.append("Генезис-блок должен иметь previous_hash = '0'")
-                
-                try:
-                    transactions = json.loads(block.transactions)
-                    if not isinstance(transactions, list) or len(transactions) == 0:
-                        is_valid = False
-                        messages.append("Генезис-блок должен содержать транзакции")
-                except:
-                    is_valid = False
-                    messages.append("Неверный формат транзакций")
-                
-                # Для генезис-блока подтверждения не обязательны
-                if block.confirmations:
-                    try:
-                        confirmations = json.loads(block.confirmations)
-                    except:
-                        confirmations = []
-            else:
-                # Стандартная проверка для обычных блоков
-                block_obj = Block(
-                    index=block.index,
-                    timestamp=block.timestamp,
-                    transactions=json.loads(block.transactions),
-                    previous_hash=block.previous_hash
-                )
-                calculated_hash = block_obj.calculate_hash()
-                
-                if calculated_hash != block.hash:
-                    is_valid = False
-                    messages.append(f"Неверный хэш: рассчитано {calculated_hash}")
-                
-                # Проверяем связь с предыдущим блоком
-                prev_block = BlockchainBlock.query.filter_by(
-                    index=block.index-1,
-                    node_id=block.node_id
-                ).first()
-                
-                if not prev_block:
-                    is_valid = False
-                    messages.append("Предыдущий блок не найден")
-                elif block.previous_hash != prev_block.hash:
-                    is_valid = False
-                    messages.append(f"Неверный previous_hash: ожидалось {prev_block.hash}")
-                
-                # Проверяем подтверждения
-                if block.confirmations:
-                    try:
-                        confirmations = json.loads(block.confirmations)
-                    except:
-                        confirmations = []
-                
-                if len(confirmations) < required_confirmations:
-                    is_valid = False
-                    messages.append(f"Недостаточно подтверждений: {len(confirmations)} из {required_confirmations}")
-
-            # Группируем блоки по хэшам
-            if block.hash not in hash_groups:
-                hash_groups[block.hash] = {
-                    'nodes': [],
-                    'is_valid': True,
-                    'messages': []
-                }
-            
-            hash_groups[block.hash]['nodes'].append(block.node_id)
-            hash_groups[block.hash]['is_valid'] = hash_groups[block.hash]['is_valid'] and is_valid
-            if messages:
-                hash_groups[block.hash]['messages'].append(f"Узел {block.node_id}: {'; '.join(messages)}")
-
-            # Добавляем детальный результат
-            results.append({
-                'block_index': block.index,
-                'node_id': block.node_id,
-                'is_valid': is_valid,
-                'message': "; ".join(messages) if messages else "OK",
-                'hash': block.hash,
-                'previous_hash': block.previous_hash,
-                'confirmations': len(confirmations),
-                'confirming_nodes': confirmations,
-                'required_confirmations': 1 if block.index == 0 else required_confirmations
-            })
-
-        # Формируем сводные результаты по группам хэшей
-        summary = []
-        for block_hash, group in hash_groups.items():
-            summary.append({
-                'block_hash': block_hash,
-                'nodes': group['nodes'],
-                'is_valid': group['is_valid'],
-                'messages': group['messages'],
-                'consensus': len(group['nodes']) >= required_confirmations
-            })
+        # 6. Формируем результат
+        result = {
+            'block_index': block_index,
+            'local_block': {
+                'hash': local_block.hash,
+                'is_valid': local_integrity['is_valid'],
+                'message': local_integrity['message'],
+                'confirmations': json.loads(local_block.confirmations or '[]')
+            },
+            'network_status': {
+                'total_nodes': total_nodes,
+                'nodes_checked': len(other_blocks) + 1,
+                'valid_copies': valid_copies,
+                'required_confirmations': required_confirmations,
+                'consensus_reached': consensus_reached,
+                'discrepancies': discrepancies
+            },
+            'overall_valid': is_valid
+        }
 
         return jsonify({
             'success': True,
-            'block_index': block_index,
-            'total_nodes': total_nodes,
-            'required_confirmations': required_confirmations,
-            'results': results,  # Детальные результаты по каждой копии
-            'summary': summary,  # Сводка по группам хэшей
-            'has_conflicts': len(hash_groups) > 1  # Есть ли разные версии блока
+            'result': result,
+            'block_index': block_index
         })
 
     except Exception as e:
-        app.logger.error(f"Error verifying block {block_index}: {str(e)}")
+        app.logger.error(f"Error in verify_block: {str(e)}")
         return jsonify({
             'success': False,
             'message': str(e),
             'block_index': block_index
         }), 500
+
+
+def verify_block_integrity(block):
+    """Проверяет целостность одного блока"""
+    try:
+        # Для генезис-блока
+        if block.index == 0:
+            return {
+                'is_valid': True,
+                'message': 'Генезис-блок (специальные правила)'
+            }
+
+        # Для обычных блоков
+        block_obj = Block(
+            index=block.index,
+            timestamp=block.timestamp,
+            transactions=json.loads(block.transactions),
+            previous_hash=block.previous_hash
+        )
+        calculated_hash = block_obj.calculate_hash()
+
+        if calculated_hash != block.hash:
+            return {
+                'is_valid': False,
+                'message': f'Неверный хэш: рассчитано {calculated_hash}'
+            }
+
+        # Проверка связи с предыдущим блоком
+        prev_block = BlockchainBlock.query.filter_by(
+            index=block.index - 1,
+            node_id=block.node_id
+        ).first()
+
+        if not prev_block:
+            return {
+                'is_valid': False,
+                'message': 'Предыдущий блок не найден'
+            }
+        
+        if block.previous_hash != prev_block.hash:
+            return {
+                'is_valid': False,
+                'message': f'Неверный previous_hash: ожидалось {prev_block.hash}'
+            }
+
+        # Проверка подтверждений
+        confirmations = json.loads(block.confirmations or '[]')
+        total_nodes = len(NODE_DOMAINS)
+        required = (total_nodes - 1) // 3 * 2 + 1
+        
+        if len(confirmations) < required:
+            return {
+                'is_valid': False,
+                'message': f'Недостаточно подтверждений: {len(confirmations)}/{required}'
+            }
+
+        return {
+            'is_valid': True,
+            'message': 'Блок достоверен'
+        }
+
+    except Exception as e:
+        return {
+            'is_valid': False,
+            'message': f'Ошибка проверки: {str(e)}'
+        }
 
 @app.route('/test_verify_block/<int:block_index>')
 def test_verify_block(block_index):
