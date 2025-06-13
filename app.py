@@ -2817,130 +2817,138 @@ def debug_blockchain():
 @login_required
 def verify_block(block_index):
     try:
-        # Получаем все блоки с этим индексом (от всех узлов)
-        blocks = BlockchainBlock.query.filter_by(index=block_index).all()
+        # Получаем все копии этого блока (со всех узлов)
+        blocks = BlockchainBlock.query.filter_by(index=block_index).order_by(BlockchainBlock.node_id).all()
+        
         if not blocks:
             return jsonify({
                 'success': False,
-                'message': f'Блок с индексом {block_index} не найден',
+                'message': f'Блок с индексом {block_index} не найден ни на одном узле',
                 'block_index': block_index
             }), 404
-        
-        results = []
+
         total_nodes = len(NODE_DOMAINS)
-        required_confirmations = (total_nodes - 1) // 3 * 2 + 1  # Кворум (2f + 1)
-        
+        required_confirmations = (total_nodes - 1) // 3 * 2 + 1
+        results = []
+        hash_groups = {}
+
+        # Проверяем каждую копию блока
         for block in blocks:
-            try:
-                # Проверяем целостность блока
-                is_valid = True
-                messages = []
+            is_valid = True
+            messages = []
+            confirmations = []
+
+            # Особые правила для генезис-блока (index = 0)
+            if block.index == 0:
+                if block.previous_hash != "0":
+                    is_valid = False
+                    messages.append("Генезис-блок должен иметь previous_hash = '0'")
                 
-                # Для генезис-блока специальная проверка
-                if block.index == 0:
-                    expected_data = {
-                        'index': 0,
-                        'timestamp': '2025-01-01T00:00:00+00:00',
-                        'transactions': [{"message": "Genesis Block"}],
-                        'previous_hash': "0"
-                    }
-                    
-                    # Сериализуем с теми же параметрами, что и при создании
-                    block_string = json.dumps(
-                        expected_data,
-                        sort_keys=True,
-                        ensure_ascii=False,
-                        separators=(',', ':')
-                    ).encode('utf-8')
-                    
-                    expected_hash = hashlib.sha256(block_string).hexdigest()
-                    
-                    if block.hash != expected_hash:
+                try:
+                    transactions = json.loads(block.transactions)
+                    if not isinstance(transactions, list) or len(transactions) == 0:
                         is_valid = False
-                        messages.append(f"Неверный хеш генезис-блока: ожидалось {expected_hash}, получено {block.hash}")
+                        messages.append("Генезис-блок должен содержать транзакции")
+                except:
+                    is_valid = False
+                    messages.append("Неверный формат транзакций")
                 
-                # Для остальных блоков
-                else:
-                    # Проверяем хэш блока
-                    block_obj = Block(
-                        index=block.index,
-                        timestamp=block.timestamp,
-                        transactions=json.loads(block.transactions),
-                        previous_hash=block.previous_hash
-                    )
-                    calculated_hash = block_obj.calculate_hash()
-                    
-                    if calculated_hash != block.hash:
-                        is_valid = False
-                        messages.append(f"Хэш блока не совпадает: рассчитано {calculated_hash}, ожидалось {block.hash}")
-                    
-                    # Проверяем связь с предыдущим блоком
-                    prev_block = BlockchainBlock.query.filter_by(
-                        index=block.index - 1,
-                        node_id=block.node_id
-                    ).first()
-                    
-                    if not prev_block:
-                        is_valid = False
-                        messages.append("Предыдущий блок не найден")
-                    elif block.previous_hash != prev_block.hash:
-                        is_valid = False
-                        messages.append(f"Неверный previous_hash: ожидалось {prev_block.hash}, получено {block.previous_hash}")
+                # Для генезис-блока подтверждения не обязательны
+                if block.confirmations:
+                    try:
+                        confirmations = json.loads(block.confirmations)
+                    except:
+                        confirmations = []
+            else:
+                # Стандартная проверка для обычных блоков
+                block_obj = Block(
+                    index=block.index,
+                    timestamp=block.timestamp,
+                    transactions=json.loads(block.transactions),
+                    previous_hash=block.previous_hash
+                )
+                calculated_hash = block_obj.calculate_hash()
+                
+                if calculated_hash != block.hash:
+                    is_valid = False
+                    messages.append(f"Неверный хэш: рассчитано {calculated_hash}")
+                
+                # Проверяем связь с предыдущим блоком
+                prev_block = BlockchainBlock.query.filter_by(
+                    index=block.index-1,
+                    node_id=block.node_id
+                ).first()
+                
+                if not prev_block:
+                    is_valid = False
+                    messages.append("Предыдущий блок не найден")
+                elif block.previous_hash != prev_block.hash:
+                    is_valid = False
+                    messages.append(f"Неверный previous_hash: ожидалось {prev_block.hash}")
                 
                 # Проверяем подтверждения
-                confirmations = []
                 if block.confirmations:
                     try:
                         confirmations = json.loads(block.confirmations)
                     except:
                         confirmations = []
                 
-                confirmations_count = len(confirmations)
-                consensus_reached = confirmations_count >= required_confirmations
-                
-                if not consensus_reached:
+                if len(confirmations) < required_confirmations:
                     is_valid = False
-                    messages.append(f"Недостаточно подтверждений: {confirmations_count} из {required_confirmations}")
-                
-                results.append({
-                    'block_index': block.index,
-                    'node_id': block.node_id,
-                    'is_valid': is_valid,
-                    'message': "; ".join(messages) if messages else "Блок достоверен",
-                    'hash': block.hash,
-                    'previous_hash': block.previous_hash,
-                    'confirmations': confirmations_count,
-                    'confirming_nodes': confirmations,
-                    'required_confirmations': required_confirmations
-                })
-                
-            except Exception as block_error:
-                app.logger.error(f"Error verifying block {block_index}: {str(block_error)}")
-                results.append({
-                    'block_index': block_index,
-                    'node_id': block.node_id if block else None,
-                    'is_valid': False,
-                    'message': f"Ошибка проверки: {str(block_error)}",
-                    'hash': block.hash if block else None,
-                    'previous_hash': block.previous_hash if block else None,
-                    'confirmations': 0,
-                    'confirming_nodes': [],
-                    'required_confirmations': required_confirmations
-                })
-        
+                    messages.append(f"Недостаточно подтверждений: {len(confirmations)} из {required_confirmations}")
+
+            # Группируем блоки по хэшам
+            if block.hash not in hash_groups:
+                hash_groups[block.hash] = {
+                    'nodes': [],
+                    'is_valid': True,
+                    'messages': []
+                }
+            
+            hash_groups[block.hash]['nodes'].append(block.node_id)
+            hash_groups[block.hash]['is_valid'] = hash_groups[block.hash]['is_valid'] and is_valid
+            if messages:
+                hash_groups[block.hash]['messages'].append(f"Узел {block.node_id}: {'; '.join(messages)}")
+
+            # Добавляем детальный результат
+            results.append({
+                'block_index': block.index,
+                'node_id': block.node_id,
+                'is_valid': is_valid,
+                'message': "; ".join(messages) if messages else "OK",
+                'hash': block.hash,
+                'previous_hash': block.previous_hash,
+                'confirmations': len(confirmations),
+                'confirming_nodes': confirmations,
+                'required_confirmations': 1 if block.index == 0 else required_confirmations
+            })
+
+        # Формируем сводные результаты по группам хэшей
+        summary = []
+        for block_hash, group in hash_groups.items():
+            summary.append({
+                'block_hash': block_hash,
+                'nodes': group['nodes'],
+                'is_valid': group['is_valid'],
+                'messages': group['messages'],
+                'consensus': len(group['nodes']) >= required_confirmations
+            })
+
         return jsonify({
             'success': True,
-            'results': results,
             'block_index': block_index,
-            'total_nodes': total_nodes
+            'total_nodes': total_nodes,
+            'required_confirmations': required_confirmations,
+            'results': results,  # Детальные результаты по каждой копии
+            'summary': summary,  # Сводка по группам хэшей
+            'has_conflicts': len(hash_groups) > 1  # Есть ли разные версии блока
         })
-    
+
     except Exception as e:
-        app.logger.error(f"Error in verify_block endpoint for block {block_index}: {str(e)}", exc_info=True)
+        app.logger.error(f"Error verifying block {block_index}: {str(e)}")
         return jsonify({
             'success': False,
-            'message': f"Внутренняя ошибка сервера при проверке блока {block_index}",
-            'error': str(e),
+            'message': str(e),
             'block_index': block_index
         }), 500
 
