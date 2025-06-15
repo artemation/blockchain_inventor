@@ -891,29 +891,19 @@
                             const confirmations = result.local_block.confirmations ?
                                 result.local_block.confirmations.length : 0;
     
-                            // Обрабатываем проблему с локальным блоком
+                            // Обрабатываем локальную проблему
                             if (result.local_block.issue) {
-                                if (result.local_block.issue.issue === 'hash_mismatch') {
-                                    message = `Неверный хэш: рассчитано ${result.local_block.issue.expected_hash.slice(0, 8)}...${result.local_block.issue.expected_hash.slice(-8)}`;
-                                } else {
-                                    message = `Ошибка: ${result.local_block.issue.issue}`;
-                                }
+                                message = result.local_block.issue.message || `Неверный хэш: рассчитано ${result.local_block.issue.expected_hash.slice(0, 8)}...${result.local_block.issue.expected_hash.slice(-8)}`;
                             }
     
-                            // Формируем список расхождений по другим узлам
+                            // Формируем список расхождений
                             let discrepanciesHtml = '';
                             if (result.network_status.discrepancies && result.network_status.discrepancies.length > 0) {
                                 discrepanciesHtml = '<div class="mt-2"><small><strong>Расхождения:</strong><ul>';
                                 result.network_status.discrepancies.forEach(d => {
-                                    if (d.issue === 'hash_mismatch') {
-                                        discrepanciesHtml += `
-                                            <li>Узел ${d.node_id}: Неверный хэш (${d.actual_hash.slice(0, 8)}...${d.actual_hash.slice(-8)}) вместо ${d.expected_hash.slice(0, 8)}...${d.expected_hash.slice(-8)}</li>
-                                        `;
-                                    } else if (d.issue === 'missing_confirmations') {
-                                        discrepanciesHtml += `
-                                            <li>Узел ${d.node_id}: Отсутствуют подтверждения от узлов ${d.missing_nodes.join(', ')}</li>
-                                        `;
-                                    }
+                                    discrepanciesHtml += `
+                                        <li>Узел ${d.node_id}: ${d.message || `Неверный хэш (${d.actual_hash.slice(0, 8)}...${d.actual_hash.slice(-8)}) вместо ${d.expected_hash.slice(0, 8)}...${d.expected_hash.slice(-8)}`}</li>
+                                    `;
                                 });
                                 discrepanciesHtml += '</ul></small></div>';
                             }
@@ -1005,29 +995,19 @@
                         const confirmations = result.local_block.confirmations ?
                             result.local_block.confirmations.length : 0;
     
-                        // Обрабатываем проблему с локальным блоком
+                        // Обрабатываем локальную проблему
                         if (result.local_block.issue) {
-                            if (result.local_block.issue.issue === 'hash_mismatch') {
-                                message = `Неверный хэш: рассчитано ${result.local_block.issue.expected_hash.slice(0, 8)}...${result.local_block.issue.expected_hash.slice(-8)}`;
-                            } else {
-                                message = `Ошибка: ${result.local_block.issue.issue}`;
-                            }
+                            message = result.local_block.issue.message || `Неверный хэш: рассчитано ${result.local_block.issue.expected_hash.slice(0, 8)}...${result.local_block.issue.expected_hash.slice(-8)}`;
                         }
     
-                        // Формируем список расхождений по другим узлам
+                        // Формируем список расхождений
                         let discrepanciesHtml = '';
                         if (result.network_status.discrepancies && result.network_status.discrepancies.length > 0) {
                             discrepanciesHtml = '<div class="mt-2"><small><strong>Расхождения:</strong><ul>';
                             result.network_status.discrepancies.forEach(d => {
-                                if (d.issue === 'hash_mismatch') {
-                                    discrepanciesHtml += `
-                                        <li>Узел ${d.node_id}: Неверный хэш (${d.actual_hash.slice(0, 8)}...${d.actual_hash.slice(-8)}) вместо ${d.expected_hash.slice(0, 8)}...${d.expected_hash.slice(-8)}</li>
-                                    `;
-                                } else if (d.issue === 'missing_confirmations') {
-                                    discrepanciesHtml += `
-                                        <li>Узел ${d.node_id}: Отсутствуют подтверждения от узлов ${d.missing_nodes.join(', ')}</li>
-                                    `;
-                                }
+                                discrepanciesHtml += `
+                                    <li>Узел ${d.node_id}: ${d.message || `Неверный хэш (${d.actual_hash.slice(0, 8)}...${d.actual_hash.slice(-8)}) вместо ${d.expected_hash.slice(0, 8)}...${d.expected_hash.slice(-8)}`}</li>
+                                `;
                             });
                             discrepanciesHtml += '</ul></small></div>';
                         }
