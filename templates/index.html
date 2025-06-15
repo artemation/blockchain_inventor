@@ -1217,7 +1217,7 @@
                 <p class="mt-3">Проверка целостности данных...</p>
             </div>
         `);
-
+    
         $.ajax({
             url: '/check_integrity/' + recordId,
             type: 'POST',
@@ -1229,44 +1229,95 @@
                 transaction_data: null
             }),
             success: function(response) {
-                // Добавим логирование для отладки
-                console.log("Response from server:", response);
-
                 let resultHtml;
-
+                
                 if (response.success === true) {
+                    // Успешная проверка - хэши совпадают
                     resultHtml = `
                         <div class="text-center">
                             <i class="fas fa-check-circle fa-4x text-success mb-3"></i>
-                            <h5 class="font-weight-bold text-success mb-3">Запись верна</h5>
-                            <p>${response.message || 'Все данные соответствуют записям в блокчейне.'}</p>
-                    `;
-                } else {
-                    resultHtml = `
-                        <div class="text-center">
-                            <i class="fas fa-times-circle fa-4x text-danger mb-3"></i>
-                            <h5 class="font-weight-bold text-danger mb-3">Обнаружены проблемы</h5>
-                            <p>${response.message || 'Данные не соответствуют записям в блокчейне.'}</p>
-                    `;
-                }
-
-                // Добавляем дополнительную информацию, если она есть
-                if (response.details) {
-                    resultHtml += `<p class="text-muted small">${response.details}</p>`;
-                }
-
-                if (response.transaction_data) {
-                    resultHtml += `
-                        <div class="mt-3 text-left">
-                            <h6 class="font-weight-bold">Данные транзакции:</h6>
-                            <div class="bg-light p-3 rounded">
-                                <pre class="mb-0 small">${JSON.stringify(response.transaction_data, null, 2)}</pre>
+                            <h5 class="font-weight-bold text-success mb-3">${response.message}</h5>
+                            
+                            <div class="bg-light p-3 rounded mt-3 text-left">
+                                <div class="mb-2">
+                                    <span class="text-muted">Вычисленный хэш:</span>
+                                    <code class="d-block mt-1">${response.computed_hash}</code>
+                                </div>
+                                <div class="mb-2">
+                                    <span class="text-muted">Хранимый хэш:</span>
+                                    <code class="d-block mt-1">${response.stored_hash}</code>
+                                </div>
+                                <div class="text-center mt-3">
+                                    <button class="btn btn-sm btn-outline-secondary" onclick="copyToClipboard('${response.computed_hash}')">
+                                        <i class="fas fa-copy mr-1"></i> Копировать хэш
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     `;
+                } else {
+                    // Хэши не совпадают - показываем подробности
+                    let detailsHtml = `
+                        <div class="bg-light p-3 rounded mt-3 text-left">
+                            <h6 class="font-weight-bold mb-3">Детали расхождения:</h6>
+                            
+                            <div class="mb-2">
+                                <span class="text-muted">Вычисленный хэш:</span>
+                                <code class="d-block mt-1">${response.computed_hash || 'N/A'}</code>
+                            </div>
+                            <div class="mb-2">
+                                <span class="text-muted">Хранимый хэш:</span>
+                                <code class="d-block mt-1">${response.stored_hash || 'N/A'}</code>
+                            </div>`;
+    
+                    // Добавляем информацию о timestamp, если есть
+                    if (response.details && response.details.timestamp_used) {
+                        detailsHtml += `
+                            <div class="mb-2">
+                                <span class="text-muted">Использованный timestamp:</span>
+                                <code class="d-block mt-1">${response.details.timestamp_used}</code>
+                            </div>
+                            <div class="mb-2">
+                                <span class="text-muted">Timestamp в БД:</span>
+                                <code class="d-block mt-1">${response.details.timestamp_in_db}</code>
+                            </div>`;
+                    }
+    
+                    // Добавляем возможные причины
+                    if (response.possible_reasons) {
+                        detailsHtml += `
+                            <div class="mt-3">
+                                <h6 class="font-weight-bold">Возможные причины:</h6>
+                                <ul class="small">`;
+                        
+                        response.possible_reasons.forEach(reason => {
+                            detailsHtml += `<li>${reason}</li>`;
+                        });
+                        
+                        detailsHtml += `</ul></div>`;
+                    }
+    
+                    // Добавляем сериализованные данные, если есть
+                    if (response.details && response.details.serialized_data) {
+                        detailsHtml += `
+                            <div class="mt-3">
+                                <h6 class="font-weight-bold">Сериализованные данные:</h6>
+                                <pre class="bg-white p-2 rounded small">${response.details.serialized_data}</pre>
+                            </div>`;
+                    }
+    
+                    detailsHtml += `</div>`;
+    
+                    resultHtml = `
+                        <div class="text-center">
+                            <i class="fas fa-times-circle fa-4x text-danger mb-3"></i>
+                            <h5 class="font-weight-bold text-danger mb-3">${response.message}</h5>
+                            ${response.details && response.details.details ? `<p class="text-muted small">${response.details.details}</p>` : ''}
+                            ${detailsHtml}
+                        </div>
+                    `;
                 }
-
-                resultHtml += `</div>`;
+    
                 $('#integrityResult').html(resultHtml);
             },
             error: function(xhr) {
@@ -1276,7 +1327,7 @@
                 } else if (xhr.statusText) {
                     errorMessage += `: ${xhr.statusText}`;
                 }
-
+    
                 $('#integrityResult').html(`
                     <div class="text-center text-danger">
                         <i class="fas fa-exclamation-triangle fa-4x mb-3"></i>
