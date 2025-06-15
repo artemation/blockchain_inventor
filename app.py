@@ -2311,7 +2311,7 @@ def admin_create_invitation():
 
 
 def check_data_integrity(record_id, transaction_data=None):
-    """Проверяет целостность данных транзакции с учетом микросекунд"""
+    """Проверяет целостность данных транзакции в соответствии с логикой apply_transaction"""
     try:
         record = ПриходРасход.query.get(record_id)
         if not record:
@@ -2328,8 +2328,8 @@ def check_data_integrity(record_id, transaction_data=None):
                 'details': "Запись не была подтверждена в блокчейне"
             }
 
-        # Вариант 1: Проверка с полным timestamp (с микросекундами)
-        check_data_full = {
+        # Формируем данные точно в таком же формате, как в apply_transaction
+        check_data = {
             'СкладОтправительID': int(record.СкладОтправительID),
             'СкладПолучательID': int(record.СкладПолучательID),
             'ДокументID': int(record.ДокументID),
@@ -2340,27 +2340,41 @@ def check_data_integrity(record_id, transaction_data=None):
             'user_id': int(record.user_id)
         }
 
-        block_string_full = json.dumps(
-            check_data_full,
+        # Сериализация должна быть идентичной той, что используется в apply_transaction
+        block_string = json.dumps(
+            check_data,
             sort_keys=True,
             ensure_ascii=False,
             separators=(',', ':'),
             indent=None
         ).encode('utf-8')
 
-        computed_hash_full = hashlib.sha256(block_string_full).hexdigest()
+        computed_hash = hashlib.sha256(block_string).hexdigest()
 
-        if computed_hash_full == record.TransactionHash:
+        if computed_hash == record.TransactionHash:
             return {
                 'success': True,
-                'message': "Целостность данных подтверждена (с микросекундами)",
-                'computed_hash': computed_hash_full,
-                'stored_hash': record.TransactionHash
+                'message': "Целостность данных подтверждена",
+                'computed_hash': computed_hash,
+                'stored_hash': record.TransactionHash,
+                'data_used': check_data,
+                'serialized_data': block_string.decode('utf-8')
             }
 
-        # Вариант 2: Проверка без микросекунд (если хэш создавался без них)
+        # Если хэши не совпадают, проверяем возможные причины
+        mismatch_details = {
+            'computed_hash': computed_hash,
+            'stored_hash': record.TransactionHash,
+            'data_used': check_data,
+            'serialized_data': block_string.decode('utf-8'),
+            'timestamp_used': check_data['timestamp'],
+            'timestamp_in_db': record.Timestamp.isoformat() if record.Timestamp else None
+        }
+
+        # Проверяем, не связано ли расхождение с форматом timestamp
         if record.Timestamp:
-            check_data_no_ms = check_data_full.copy()
+            # Вариант 1: Убираем микросекунды
+            check_data_no_ms = check_data.copy()
             check_data_no_ms['timestamp'] = record.Timestamp.replace(microsecond=0).isoformat()
             
             block_string_no_ms = json.dumps(
@@ -2381,18 +2395,38 @@ def check_data_integrity(record_id, transaction_data=None):
                     'stored_hash': record.TransactionHash
                 }
 
+            # Вариант 2: UTC формат (как в apply_transaction)
+            check_data_utc = check_data.copy()
+            check_data_utc['timestamp'] = record.Timestamp.isoformat().replace('+00:00', 'Z')
+            
+            block_string_utc = json.dumps(
+                check_data_utc,
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(',', ':'),
+                indent=None
+            ).encode('utf-8')
+
+            computed_hash_utc = hashlib.sha256(block_string_utc).hexdigest()
+
+            if computed_hash_utc == record.TransactionHash:
+                return {
+                    'success': True,
+                    'message': "Целостность данных подтверждена (UTC формат)",
+                    'computed_hash': computed_hash_utc,
+                    'stored_hash': record.TransactionHash
+                }
+
         return {
             'success': False,
             'message': "Обнаружены расхождения в данных",
-            'details': {
-                'computed_hash_full': computed_hash_full,
-                'computed_hash_no_ms': computed_hash_no_ms if 'computed_hash_no_ms' in locals() else None,
-                'stored_hash': record.TransactionHash,
-                'data_used_full': check_data_full,
-                'data_used_no_ms': check_data_no_ms if 'check_data_no_ms' in locals() else None,
-                'serialized_data_full': block_string_full.decode('utf-8'),
-                'serialized_data_no_ms': block_string_no_ms.decode('utf-8') if 'block_string_no_ms' in locals() else None
-            }
+            'details': mismatch_details,
+            'possible_reasons': [
+                "Разный формат timestamp (микросекунды, UTC и т.д.)",
+                "Разный порядок полей при сериализации JSON",
+                "Разные разделители в JSON",
+                "Разная кодировка строки"
+            ]
         }
 
     except Exception as e:
