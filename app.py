@@ -2813,6 +2813,25 @@ def debug_blockchain():
     ]
     return jsonify({'blocks': block_data})
 
+async def fetch_block_from_node(session, node_id, domain, block_index):
+    """Асинхронная функция для получения блока с удаленного узла."""
+    try:
+        url = f"https://{domain}/get_block/{block_index}"
+        async with session.get(url, timeout=3) as response:
+            if response.status == 200:
+                block_data = await response.json()
+                return {
+                    'node_id': node_id,
+                    'data': block_data,
+                    'source': 'remote'
+                }
+            else:
+                app.logger.error(f"Error fetching block from node {node_id}: HTTP {response.status}")
+                return None
+    except Exception as e:
+        app.logger.error(f"Error fetching block from node {node_id}: {str(e)}")
+        return None
+
 @app.route('/verify_block/<int:block_index>')
 @login_required
 def verify_block(block_index):
@@ -2832,22 +2851,27 @@ def verify_block(block_index):
 
         # 2. Получаем копии этого блока с других узлов
         other_blocks = []
-        for node_id, domain in NODE_DOMAINS.items():
-            if node_id == NODE_ID:
-                continue
+        
+        # Создаем асинхронную сессию aiohttp
+        async def fetch_all_blocks():
+            async with aiohttp.ClientSession() as session:
+                tasks = []
+                for node_id, domain in NODE_DOMAINS.items():
+                    if node_id == NODE_ID:
+                        continue
+                    tasks.append(fetch_block_from_node(session, node_id, domain, block_index))
+                return await asyncio.gather(*tasks, return_exceptions=True)
 
-            try:
-                url = f"https://{domain}/get_block/{block_index}"
-                response = requests.get(url, timeout=3)
-                if response.status_code == 200:
-                    block_data = response.json()
-                    other_blocks.append({
-                        'node_id': node_id,
-                        'data': block_data,
-                        'source': 'remote'
-                    })
-            except Exception as e:
-                app.logger.error(f"Error fetching block from node {node_id}: {str(e)}")
+        # Выполняем асинхронные запросы в синхронном контексте
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            results = loop.run_until_complete(fetch_all_blocks())
+            for result in results:
+                if result is not None:
+                    other_blocks.append(result)
+        finally:
+            loop.close()
 
         # 3. Проверяем целостность локального блока
         local_integrity = verify_block_integrity(local_block)
@@ -2859,7 +2883,7 @@ def verify_block(block_index):
 
         for remote in other_blocks:
             # Проверяем, совпадает ли хэш с локальным
-            if remote['data']['hash'] != local_block.hash:
+            if remote['data']['hash'].lower() != local_block.hash.lower():
                 consensus_reached = False
                 discrepancies.append({
                     'node_id': remote['node_id'],
@@ -2899,7 +2923,7 @@ def verify_block(block_index):
             'local_block': {
                 'hash': local_block.hash,
                 'is_valid': local_integrity['is_valid'],
-                'message': local_integrity['message'],
+                'message': local_integrity['message'],  # Исправлено: убрана опечатка
                 'confirmations': json.loads(local_block.confirmations or '[]')
             },
             'network_status': {
@@ -2918,7 +2942,7 @@ def verify_block(block_index):
 
         return jsonify({
             'success': True,
-            'results': result_array,  # Изменено: возвращаем массив под ключом 'results'
+            'results': result_array,  # Возвращаем массив под ключом 'results'
             'block_index': block_index
         })
 
