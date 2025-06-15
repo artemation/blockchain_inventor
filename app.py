@@ -2311,9 +2311,8 @@ def admin_create_invitation():
 
 
 def check_data_integrity(record_id, transaction_data=None):
-    """Проверяет целостность данных транзакции с улучшенной обработкой форматов"""
+    """Проверяет целостность данных транзакции с точной сериализацией"""
     try:
-        # Получаем запись из базы данных
         record = ПриходРасход.query.get(record_id)
         if not record:
             return {
@@ -2329,21 +2328,28 @@ def check_data_integrity(record_id, transaction_data=None):
                 'details': "Запись не была подтверждена в блокчейне"
             }
 
-        # Формируем данные для проверки в том же порядке, что и при создании транзакции
+        # Формируем данные в ТОЧНОМ порядке и формате, как при создании транзакции
         check_data = {
-            'СкладОтправительID': record.СкладОтправительID,
-            'СкладПолучательID': record.СкладПолучательID,
-            'ДокументID': record.ДокументID,
-            'ТоварID': record.ТоварID,
+            'СкладОтправительID': int(record.СкладОтправительID),
+            'СкладПолучательID': int(record.СкладПолучательID),
+            'ДокументID': int(record.ДокументID),
+            'ТоварID': int(record.ТоварID),
             'Количество': float(record.Количество),
-            'Единица_ИзмеренияID': record.Единица_ИзмеренияID,
+            'Единица_ИзмеренияID': int(record.Единица_ИзмеренияID),
             'timestamp': record.Timestamp.isoformat() if record.Timestamp else None,
-            'user_id': record.user_id
+            'user_id': int(record.user_id)
         }
 
-        # Сериализуем точно так же, как при создании транзакции
-        serialized_data = json.dumps(check_data, sort_keys=True).encode('utf-8')
-        computed_hash = hashlib.sha256(serialized_data).hexdigest()
+        # Сериализация с теми же параметрами, что и при создании транзакции
+        block_string = json.dumps(
+            check_data,
+            sort_keys=True,          # Сортировка ключей
+            ensure_ascii=False,      # Не экранировать Unicode
+            separators=(',', ':'),   # Без пробелов
+            indent=None              # Без отступов
+        ).encode('utf-8')
+
+        computed_hash = hashlib.sha256(block_string).hexdigest()
 
         if computed_hash == record.TransactionHash:
             return {
@@ -2353,6 +2359,19 @@ def check_data_integrity(record_id, transaction_data=None):
                 'stored_hash': record.TransactionHash
             }
 
+        # Дополнительная проверка: возможно, в БД хранится хэш без microseconds
+        if record.Timestamp:
+            check_data['timestamp'] = record.Timestamp.replace(microsecond=0).isoformat()
+            block_string = json.dumps(check_data, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+            computed_hash = hashlib.sha256(block_string).hexdigest()
+            if computed_hash == record.TransactionHash:
+                return {
+                    'success': True,
+                    'message': "Целостность подтверждена (без microseconds)",
+                    'computed_hash': computed_hash,
+                    'stored_hash': record.TransactionHash
+                }
+
         return {
             'success': False,
             'message': "Обнаружены расхождения в данных",
@@ -2360,7 +2379,7 @@ def check_data_integrity(record_id, transaction_data=None):
                 'computed_hash': computed_hash,
                 'stored_hash': record.TransactionHash,
                 'data_used': check_data,
-                'serialized_data': serialized_data.decode('utf-8')
+                'serialized_data': block_string.decode('utf-8')
             }
         }
 
@@ -2837,7 +2856,7 @@ def verify_block(block_index):
                 discrepancies.append({
                     'node_id': remote['node_id'],
                     'issue': 'missing_confirmations',
-                    'missing_nodes': list(local_confirmations - remote_confirmations)
+                    'missing_nodes': list(local_confirmations - remote_confirmations)  # Преобразуем set в list
                 })
 
             # Если удалённый блок валиден, увеличиваем счётчик
@@ -2861,7 +2880,7 @@ def verify_block(block_index):
                 'hash': local_block.hash,
                 'is_valid': local_integrity['is_valid'],
                 'message': local_integrity['message'],
-                'confirmations': local_confirmations  # Возвращаем как список
+                'confirmations': list(local_confirmations)  # Преобразуем set в list для JSON
             },
             'network_status': {
                 'total_nodes': total_nodes,
