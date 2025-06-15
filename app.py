@@ -2329,62 +2329,22 @@ def check_data_integrity(record_id, transaction_data=None):
                 'details': "Запись не была подтверждена в блокчейне"
             }
 
-        # Универсальная нормализация данных
-        def normalize_value(value):
-            if value is None:
-                return ""
-            if isinstance(value, (int, float)):
-                return str(value)
-            if isinstance(value, str):
-                return value.strip()
-            if hasattr(value, 'isoformat'):
-                return value.isoformat()
-            return str(value)
-
-        # Нормализация timestamp с учетом всех возможных форматов
-        def normalize_timestamp(ts):
-            if ts is None:
-                return ""
-            try:
-                if isinstance(ts, str):
-                    # Удаляем временную зону если она есть
-                    ts = ts.replace('Z', '').split('+')[0]
-                    # Пробуем распарсить
-                    dt = datetime.fromisoformat(ts)
-                    return dt.isoformat(timespec='seconds')  # Убираем микросекунды
-                elif hasattr(ts, 'isoformat'):
-                    return ts.isoformat(timespec='seconds')
-            except ValueError:
-                pass
-            return str(ts)
-
-        # Формируем данные для проверки в строго определенном порядке
+        # Формируем данные для проверки в том же порядке, что и при создании транзакции
         check_data = {
-            'ДокументID': normalize_value(record.ДокументID),
-            'Единица_ИзмеренияID': normalize_value(record.Единица_ИзмеренияID),
-            'Количество': normalize_value(record.Количество),
-            'СкладОтправительID': normalize_value(record.СкладОтправительID),
-            'СкладПолучательID': normalize_value(record.СкладПолучательID),
-            'ТоварID': normalize_value(record.ТоварID),
-            'user_id': normalize_value(record.user_id),
-            'timestamp': normalize_timestamp(record.Timestamp)
+            'СкладОтправительID': record.СкладОтправительID,
+            'СкладПолучательID': record.СкладПолучательID,
+            'ДокументID': record.ДокументID,
+            'ТоварID': record.ТоварID,
+            'Количество': float(record.Количество),
+            'Единица_ИзмеренияID': record.Единица_ИзмеренияID,
+            'timestamp': record.Timestamp.isoformat() if record.Timestamp else None,
+            'user_id': record.user_id
         }
 
-        # Стандартизированная сериализация JSON
-        def standard_json_serializer(data):
-            return json.dumps(
-                data,
-                sort_keys=True,
-                ensure_ascii=False,
-                separators=(',', ':'),
-                indent=None
-            ).encode('utf-8')
-
-        # Вычисляем хэш
-        serialized_data = standard_json_serializer(check_data)
+        # Сериализуем точно так же, как при создании транзакции
+        serialized_data = json.dumps(check_data, sort_keys=True).encode('utf-8')
         computed_hash = hashlib.sha256(serialized_data).hexdigest()
 
-        # Сравниваем хэши
         if computed_hash == record.TransactionHash:
             return {
                 'success': True,
@@ -2393,40 +2353,6 @@ def check_data_integrity(record_id, transaction_data=None):
                 'stored_hash': record.TransactionHash
             }
 
-        # Если хэши не совпали, пробуем альтернативные варианты
-        alternative_hashes = []
-        
-        # Вариант 1: Без timestamp
-        alt_data1 = {k: v for k, v in check_data.items() if k != 'timestamp'}
-        alt_hash1 = hashlib.sha256(standard_json_serializer(alt_data1)).hexdigest()
-        alternative_hashes.append(('without_timestamp', alt_hash1))
-        
-        # Вариант 2: Числовые значения как числа (не строки)
-        alt_data2 = {
-            'ДокументID': int(record.ДокументID),
-            'Единица_ИзмеренияID': int(record.Единица_ИзмеренияID),
-            'Количество': float(record.Количество),
-            'СкладОтправительID': int(record.СкладОтправительID),
-            'СкладПолучательID': int(record.СкладПолучательID),
-            'ТоварID': int(record.ТоварID),
-            'user_id': int(record.user_id),
-            'timestamp': normalize_timestamp(record.Timestamp)
-        }
-        alt_hash2 = hashlib.sha256(standard_json_serializer(alt_data2)).hexdigest()
-        alternative_hashes.append(('numeric_values', alt_hash2))
-
-        # Проверяем альтернативные варианты
-        for variant, alt_hash in alternative_hashes:
-            if alt_hash == record.TransactionHash:
-                return {
-                    'success': True,
-                    'message': f"Целостность подтверждена (вариант: {variant})",
-                    'computed_hash': alt_hash,
-                    'stored_hash': record.TransactionHash,
-                    'variant_used': variant
-                }
-
-        # Если ни один вариант не подошел
         return {
             'success': False,
             'message': "Обнаружены расхождения в данных",
@@ -2444,6 +2370,7 @@ def check_data_integrity(record_id, transaction_data=None):
             'message': "Ошибка при проверке целостности",
             'details': str(e),
             'error_type': type(e).__name__
+        }
         }
 
 @app.route('/check_integrity/<int:record_id>', methods=['POST'])
