@@ -887,9 +887,36 @@
                             const hash = result.local_block.hash ?
                                 `${result.local_block.hash.slice(0, 8)}...${result.local_block.hash.slice(-8)}` :
                                 'Неизвестно';
-                            const message = result.local_block.message || 'Нет информации';
+                            let message = result.local_block.message || 'Нет информации';
                             const confirmations = result.local_block.confirmations ?
                                 result.local_block.confirmations.length : 0;
+    
+                            // Обрабатываем проблему с локальным блоком
+                            if (result.local_block.issue) {
+                                if (result.local_block.issue.issue === 'hash_mismatch') {
+                                    message = `Неверный хэш: рассчитано ${result.local_block.issue.expected_hash.slice(0, 8)}...${result.local_block.issue.expected_hash.slice(-8)}`;
+                                } else {
+                                    message = `Ошибка: ${result.local_block.issue.issue}`;
+                                }
+                            }
+    
+                            // Формируем список расхождений по другим узлам
+                            let discrepanciesHtml = '';
+                            if (result.network_status.discrepancies && result.network_status.discrepancies.length > 0) {
+                                discrepanciesHtml = '<div class="mt-2"><small><strong>Расхождения:</strong><ul>';
+                                result.network_status.discrepancies.forEach(d => {
+                                    if (d.issue === 'hash_mismatch') {
+                                        discrepanciesHtml += `
+                                            <li>Узел ${d.node_id}: Неверный хэш (${d.actual_hash.slice(0, 8)}...${d.actual_hash.slice(-8)}) вместо ${d.expected_hash.slice(0, 8)}...${d.expected_hash.slice(-8)}</li>
+                                        `;
+                                    } else if (d.issue === 'missing_confirmations') {
+                                        discrepanciesHtml += `
+                                            <li>Узел ${d.node_id}: Отсутствуют подтверждения от узлов ${d.missing_nodes.join(', ')}</li>
+                                        `;
+                                    }
+                                });
+                                discrepanciesHtml += '</ul></small></div>';
+                            }
     
                             resultHtml = `
                                 <div class="card mb-2 ${result.overall_valid ? 'border-success' : 'border-danger'}">
@@ -898,6 +925,7 @@
                                         <p>${statusHtml} - ${message}</p>
                                         <p class="mb-1"><small>Хэш: <code>${hash}</code></small></p>
                                         <p class="mb-0"><small>Подтверждений: ${confirmations}</small></p>
+                                        ${discrepanciesHtml}
                                     </div>
                                 </div>
                             `;
@@ -973,9 +1001,36 @@
                         const hash = result.local_block.hash ?
                             `${result.local_block.hash.slice(0, 8)}...${result.local_block.hash.slice(-8)}` :
                             'Неизвестно';
-                        const message = result.local_block.message || 'Нет информации';
+                        let message = result.local_block.message || 'Нет информации';
                         const confirmations = result.local_block.confirmations ?
                             result.local_block.confirmations.length : 0;
+    
+                        // Обрабатываем проблему с локальным блоком
+                        if (result.local_block.issue) {
+                            if (result.local_block.issue.issue === 'hash_mismatch') {
+                                message = `Неверный хэш: рассчитано ${result.local_block.issue.expected_hash.slice(0, 8)}...${result.local_block.issue.expected_hash.slice(-8)}`;
+                            } else {
+                                message = `Ошибка: ${result.local_block.issue.issue}`;
+                            }
+                        }
+    
+                        // Формируем список расхождений по другим узлам
+                        let discrepanciesHtml = '';
+                        if (result.network_status.discrepancies && result.network_status.discrepancies.length > 0) {
+                            discrepanciesHtml = '<div class="mt-2"><small><strong>Расхождения:</strong><ul>';
+                            result.network_status.discrepancies.forEach(d => {
+                                if (d.issue === 'hash_mismatch') {
+                                    discrepanciesHtml += `
+                                        <li>Узел ${d.node_id}: Неверный хэш (${d.actual_hash.slice(0, 8)}...${d.actual_hash.slice(-8)}) вместо ${d.expected_hash.slice(0, 8)}...${d.expected_hash.slice(-8)}</li>
+                                    `;
+                                } else if (d.issue === 'missing_confirmations') {
+                                    discrepanciesHtml += `
+                                        <li>Узел ${d.node_id}: Отсутствуют подтверждения от узлов ${d.missing_nodes.join(', ')}</li>
+                                    `;
+                                }
+                            });
+                            discrepanciesHtml += '</ul></small></div>';
+                        }
     
                         html += `
                             <div class="card mb-3 ${result.overall_valid ? 'border-success' : 'border-danger'}">
@@ -984,6 +1039,7 @@
                                     <p>${statusHtml} - ${message}</p>
                                     <p class="mb-1"><small>Хэш: <code>${hash}</code></small></p>
                                     <p class="mb-0"><small>Подтверждений: ${confirmations}</small></p>
+                                    ${discrepanciesHtml}
                                 </div>
                             </div>
                         `;
