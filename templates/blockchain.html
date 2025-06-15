@@ -834,33 +834,33 @@
     <script>
 
     function verifyBlockchain() {
-        $('#verificationResults').html(`
+        const verificationResults = $('#verificationResults');
+        verificationResults.html(`
             <div class="text-center">
                 <i class="fas fa-spinner fa-spin fa-3x"></i>
                 <p>Проверка цепочки...</p>
             </div>
         `);
         $('#verificationModal').modal('show');
-        
-        let blocks = $('.block-card');
-        let totalBlocks = blocks.length;
+    
+        const blocks = $('.block-card');
+        const totalBlocks = blocks.length;
         let verifiedBlocks = 0;
         let results = [];
-        
-        // Функция для обработки завершения проверки
+    
         function processVerification() {
             if (verifiedBlocks === totalBlocks) {
                 // Сортируем результаты по номеру блока
                 results.sort((a, b) => {
-                    const aIndex = parseInt(a.match(/Блок #(\d+)/)[1]);
-                    const bIndex = parseInt(b.match(/Блок #(\d+)/)[1]);
+                    const aIndex = parseInt(a.match(/Блок #(\d+)/)?.[1] || 0);
+                    const bIndex = parseInt(b.match(/Блок #(\d+)/)?.[1] || 0);
                     return aIndex - bIndex;
                 });
-                
+    
                 const invalidBlocks = results.filter(r => r.includes('badge-danger')).length;
                 const statusClass = invalidBlocks > 0 ? 'alert-danger' : 'alert-success';
-                
-                $('#verificationResults').html(`
+    
+                verificationResults.html(`
                     <div class="alert ${statusClass}">
                         Проверено ${totalBlocks} блоков. Найдено ${invalidBlocks} проблемных блоков.
                     </div>
@@ -868,44 +868,62 @@
                 `);
             }
         }
-        
+    
         blocks.each(function() {
             const blockIndex = $(this).data('block-index');
-            
+    
             $.ajax({
                 url: `/verify_block/${blockIndex}`,
                 method: 'GET',
                 dataType: 'json',
                 success: function(data) {
-                    if (data.success) {
+                    let resultHtml = '';
+                    if (data.success && data.results && data.results.length > 0) {
                         data.results.forEach(result => {
-                            const statusHtml = result.is_valid ? 
-                                `<span class="badge badge-success">Достоверен</span>` : 
+                            const statusHtml = result.overall_valid ?
+                                `<span class="badge badge-success">Достоверен</span>` :
                                 `<span class="badge badge-danger">Недостоверен</span>`;
-                            
-                            results.push(`
-                                <div class="card mb-2 ${result.is_valid ? 'border-success' : 'border-danger'}">
+                            const nodeId = result.local_block.node_id || 'Неизвестно';
+                            const hash = result.local_block.hash ?
+                                `${result.local_block.hash.slice(0, 8)}...${result.local_block.hash.slice(-8)}` :
+                                'Неизвестно';
+                            const message = result.local_block.message || 'Нет информации';
+                            const confirmations = result.local_block.confirmations ?
+                                result.local_block.confirmations.length : 0;
+    
+                            resultHtml = `
+                                <div class="card mb-2 ${result.overall_valid ? 'border-success' : 'border-danger'}">
                                     <div class="card-body">
-                                        <h5 class="card-title">Блок #${result.block_index} (Узел ${result.node_id})</h5>
-                                        <p>${statusHtml} - ${result.message}</p>
-                                        <p class="mb-1"><small>Хэш: <code>${result.hash}</code></small></p>
-                                        <p class="mb-0"><small>Подтверждений: ${result.confirmations}</small></p>
+                                        <h5 class="card-title">Блок #${result.block_index} (Узел ${nodeId})</h5>
+                                        <p>${statusHtml} - ${message}</p>
+                                        <p class="mb-1"><small>Хэш: <code>${hash}</code></small></p>
+                                        <p class="mb-0"><small>Подтверждений: ${confirmations}</small></p>
                                     </div>
                                 </div>
-                            `);
+                            `;
                         });
                     } else {
-                        results.push(`
-                            <div class="card mb-2 border-danger">
-                                <div class="card-body">
-                                    <h5 class="card-title">Блок #${blockIndex}</h5>
-                                    <p><span class="badge badge-danger">Ошибка проверки</span></p>
-                                    <p class="mb-0">${data.message || 'Неизвестная ошибка'}</p>
+                        // Пропускаем блоки, которые не найдены
+                        if (data.message?.includes('не найдена')) {
+                            resultHtml = '';
+                        } else {
+                            resultHtml = `
+                                <div class="card mb-2 border-danger">
+                                    <div class="card-body">
+                                        <h5 class="card-title">Блок #${blockIndex} (Узел Неизвестно)</h5>
+                                        <p><span class="badge badge-danger">Ошибка проверки</span></p>
+                                        <p class="mb-0">${data.message || 'Неизвестная ошибка'}</p>
+                                        <p class="mb-1"><small>Хэш: Неизвестно</small></p>
+                                        <p class="mb-0"><small>Подтверждений: 0</small></p>
+                                    </div>
                                 </div>
-                            </div>
-                        `);
+                            `;
+                        }
                     }
-                    
+    
+                    if (resultHtml) {
+                        results.push(resultHtml);
+                    }
                     verifiedBlocks++;
                     processVerification();
                 },
@@ -913,78 +931,102 @@
                     results.push(`
                         <div class="card mb-2 border-danger">
                             <div class="card-body">
-                                <h5 class="card-title">Блок #${blockIndex}</h5>
+                                <h5 class="card-title">Блок #${blockIndex} (Узел Неизвестно)</h5>
                                 <p><span class="badge badge-danger">Ошибка запроса</span></p>
                                 <p class="mb-0">${error || 'Неизвестная ошибка'}</p>
+                                <p class="mb-1"><small>Хэш: Неизвестно</small></p>
+                                <p class="mb-0"><small>Подтверждений: 0</small></p>
                             </div>
                         </div>
                     `);
-                    
+    
                     verifiedBlocks++;
                     processVerification();
                 }
             });
         });
     }
-        
-        // Обработчик кнопки проверки
-        $(document).ready(function() {
-            $('#verifyChainBtn').click(verifyBlockchain);
-            
-            // Добавляем кнопку проверки для каждого блока
-            $('.block-card').each(function() {
-                const blockIndex = $(this).data('block-index');
-                $(this).find('.block-header').append(`
-                    <button class="btn btn-sm btn-outline-warning ml-2 verify-block-btn" data-block-index="${blockIndex}">
-                        <i class="fas fa-shield-alt mr-1"></i>Проверить
-                    </button>
-                `);
-            });
-            
-            // Обработчик проверки отдельного блока
-            $(document).on('click', '.verify-block-btn', function() {
-                const blockIndex = $(this).data('block-index');
-                $('#verificationResults').html('<div class="text-center"><i class="fas fa-spinner fa-spin fa-3x"></i><p>Проверка блока...</p></div>');
-                $('#verificationModal').modal('show');
-                
-                $.get(`/verify_block/${blockIndex}`, function(data) {
-                    if (data.success) {
-                        let html = '<h5>Результаты проверки:</h5>';
-                        
-                        data.results.forEach(result => {
-                            let statusHtml = result.is_valid ? 
-                                `<span class="badge badge-success">Достоверен</span>` : 
-                                `<span class="badge badge-danger">Недостоверен</span>`;
-                            
-                            html += `
-                                <div class="card mb-3 ${result.is_valid ? 'border-success' : 'border-danger'}">
-                                    <div class="card-body">
-                                        <h5 class="card-title">Блок #${result.block_index} (Узел ${result.node_id})</h5>
-                                        <p>${statusHtml} - ${result.message}</p>
-                                        <p class="mb-1"><small>Хэш: <code>${result.hash}</code></small></p>
-                                        <p class="mb-0"><small>Подтверждений: ${result.confirmations}</small></p>
-                                    </div>
+    
+    // Обработчик проверки отдельного блока
+    function verifySingleBlock(blockIndex) {
+        const verificationResults = $('#verificationResults');
+        verificationResults.html(`
+            <div class="text-center">
+                <i class="fas fa-spinner fa-spin fa-3x"></i>
+                <p>Проверка блока...</p>
+            </div>
+        `);
+        $('#verificationModal').modal('show');
+    
+        $.ajax({
+            url: `/verify_block/${blockIndex}`,
+            method: 'GET',
+            dataType: 'json',
+            success: function(data) {
+                let html = '<h5>Результаты проверки:</h5>';
+                if (data.success && data.results && data.results.length > 0) {
+                    data.results.forEach(result => {
+                        const statusHtml = result.overall_valid ?
+                            `<span class="badge badge-success">Достоверен</span>` :
+                            `<span class="badge badge-danger">Недостоверен</span>`;
+                        const nodeId = result.local_block.node_id || 'Неизвестно';
+                        const hash = result.local_block.hash ?
+                            `${result.local_block.hash.slice(0, 8)}...${result.local_block.hash.slice(-8)}` :
+                            'Неизвестно';
+                        const message = result.local_block.message || 'Нет информации';
+                        const confirmations = result.local_block.confirmations ?
+                            result.local_block.confirmations.length : 0;
+    
+                        html += `
+                            <div class="card mb-3 ${result.overall_valid ? 'border-success' : 'border-danger'}">
+                                <div class="card-body">
+                                    <h5 class="card-title">Блок #${result.block_index} (Узел ${nodeId})</h5>
+                                    <p>${statusHtml} - ${message}</p>
+                                    <p class="mb-1"><small>Хэш: <code>${hash}</code></small></p>
+                                    <p class="mb-0"><small>Подтверждений: ${confirmations}</small></p>
                                 </div>
-                            `;
-                        });
-                        
-                        $('#verificationResults').html(html);
-                    } else {
-                        $('#verificationResults').html(`
-                            <div class="alert alert-danger">
-                                Ошибка при проверке блока #${blockIndex}: ${data.message}
                             </div>
-                        `);
-                    }
-                }).fail(function() {
-                    $('#verificationResults').html(`
+                        `;
+                    });
+                } else {
+                    html += `
                         <div class="alert alert-danger">
-                            Ошибка при запросе проверки блока #${blockIndex}
+                            Ошибка при проверке блока #${blockIndex}: ${data.message || 'Неизвестная ошибка'}
                         </div>
-                    `);
-                });
-            });
+                    `;
+                }
+                verificationResults.html(html);
+            },
+            error: function() {
+                verificationResults.html(`
+                    <div class="alert alert-danger">
+                        Ошибка при запросе проверки блока #${blockIndex}
+                    </div>
+                `);
+            }
         });
+    }
+    
+    // Инициализация обработчиков
+    $(document).ready(function() {
+        $('#verifyChainBtn').click(verifyBlockchain);
+    
+        // Добавляем кнопку проверки для каждого блока
+        $('.block-card').each(function() {
+            const blockIndex = $(this).data('block-index');
+            $(this).find('.block-header').append(`
+                <button class="btn btn-sm btn-outline-warning ml-2 verify-block-btn" data-block-index="${blockIndex}">
+                    <i class="fas fa-shield-alt mr-1"></i>Проверить
+                </button>
+            `);
+        });
+    
+        // Обработчик проверки отдельного блока
+        $(document).on('click', '.verify-block-btn', function() {
+            const blockIndex = $(this).data('block-index');
+            verifySingleBlock(blockIndex);
+        });
+    });
         
         function showBlockDetails(blockIndex) {
             fetch(`/get_block_details/${blockIndex}`)
