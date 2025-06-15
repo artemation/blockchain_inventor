@@ -2371,7 +2371,6 @@ def check_data_integrity(record_id, transaction_data=None):
             'details': str(e),
             'error_type': type(e).__name__
         }
-        }
 
 @app.route('/check_integrity/<int:record_id>', methods=['POST'])
 @login_required
