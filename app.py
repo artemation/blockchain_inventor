@@ -2311,7 +2311,7 @@ def admin_create_invitation():
 
 
 def check_data_integrity(record_id, transaction_data=None):
-    """Проверяет целостность данных транзакции в соответствии с логикой apply_transaction"""
+    """Проверяет целостность данных транзакции с учетом формата timestamp"""
     try:
         record = ПриходРасход.query.get(record_id)
         if not record:
@@ -2328,7 +2328,7 @@ def check_data_integrity(record_id, transaction_data=None):
                 'details': "Запись не была подтверждена в блокчейне"
             }
 
-        # Формируем данные точно в таком же формате, как в apply_transaction
+        # Основной вариант проверки - точное совпадение
         check_data = {
             'СкладОтправительID': int(record.СкладОтправительID),
             'СкладПолучательID': int(record.СкладПолучательID),
@@ -2340,7 +2340,7 @@ def check_data_integrity(record_id, transaction_data=None):
             'user_id': int(record.user_id)
         }
 
-        # Сериализация должна быть идентичной той, что используется в apply_transaction
+        # Сериализация с теми же параметрами, что и при создании
         block_string = json.dumps(
             check_data,
             sort_keys=True,
@@ -2361,19 +2361,8 @@ def check_data_integrity(record_id, transaction_data=None):
                 'serialized_data': block_string.decode('utf-8')
             }
 
-        # Если хэши не совпадают, проверяем возможные причины
-        mismatch_details = {
-            'computed_hash': computed_hash,
-            'stored_hash': record.TransactionHash,
-            'data_used': check_data,
-            'serialized_data': block_string.decode('utf-8'),
-            'timestamp_used': check_data['timestamp'],
-            'timestamp_in_db': record.Timestamp.isoformat() if record.Timestamp else None
-        }
-
-        # Проверяем, не связано ли расхождение с форматом timestamp
+        # Если не совпало, пробуем вариант без микросекунд
         if record.Timestamp:
-            # Вариант 1: Убираем микросекунды
             check_data_no_ms = check_data.copy()
             check_data_no_ms['timestamp'] = record.Timestamp.replace(microsecond=0).isoformat()
             
@@ -2395,37 +2384,24 @@ def check_data_integrity(record_id, transaction_data=None):
                     'stored_hash': record.TransactionHash
                 }
 
-            # Вариант 2: UTC формат (как в apply_transaction)
-            check_data_utc = check_data.copy()
-            check_data_utc['timestamp'] = record.Timestamp.isoformat().replace('+00:00', 'Z')
-            
-            block_string_utc = json.dumps(
-                check_data_utc,
-                sort_keys=True,
-                ensure_ascii=False,
-                separators=(',', ':'),
-                indent=None
-            ).encode('utf-8')
-
-            computed_hash_utc = hashlib.sha256(block_string_utc).hexdigest()
-
-            if computed_hash_utc == record.TransactionHash:
-                return {
-                    'success': True,
-                    'message': "Целостность данных подтверждена (UTC формат)",
-                    'computed_hash': computed_hash_utc,
-                    'stored_hash': record.TransactionHash
-                }
-
+        # Если все еще не совпало, возвращаем детали
         return {
             'success': False,
             'message': "Обнаружены расхождения в данных",
-            'details': mismatch_details,
+            'details': {
+                'computed_hash': computed_hash,
+                'stored_hash': record.TransactionHash,
+                'data_used': check_data,
+                'serialized_data': block_string.decode('utf-8'),
+                'timestamp_used': check_data['timestamp'],
+                'timestamp_in_db': record.Timestamp.isoformat() if record.Timestamp else None,
+                'db_timestamp_raw': str(record.Timestamp)  # Добавляем raw значение из БД
+            },
             'possible_reasons': [
-                "Разный формат timestamp (микросекунды, UTC и т.д.)",
-                "Разный порядок полей при сериализации JSON",
-                "Разные разделители в JSON",
-                "Разная кодировка строки"
+                "Разный формат timestamp (микросекунды)",
+                "Разный порядок полей при сериализации",
+                "Разные параметры сериализации JSON",
+                "Проблемы с кодировкой"
             ]
         }
 
@@ -2824,13 +2800,74 @@ async def fetch_block_from_node(session, node_id, domain, block_index):
         app.logger.error(f"Error fetching block #{block_index} from node {node_id}: {str(e)}")
         return None
 
+async def fetch_block_verification_from_node(session, node_id, domain, block_index):
+    """Асинхронная функция для получения результата проверки блока с удаленного узла."""
+    try:
+        url = f"https://{domain}/get_block_verification/{block_index}"
+        async with session.get(url, timeout=3) as response:
+            if response.status == 200:
+                verification_data = await response.json()
+                app.logger.debug(f"Fetched verification for block #{block_index} from node {node_id}: {verification_data}")
+                return {
+                    'node_id': node_id,
+                    'data': verification_data,
+                    'source': 'remote'
+                }
+            else:
+                app.logger.error(f"Error fetching verification for block #{block_index} from node {node_id}: HTTP {response.status}")
+                return None
+    except Exception as e:
+        app.logger.error(f"Error fetching verification for block #{block_index} from node {node_id}: {str(e)}")
+        return None
+
+@app.route('/get_block_verification/<int:block_index>')
+@login_required
+def get_block_verification(block_index):
+    """Маршрут для возврата результата проверки целостности блока."""
+    try:
+        local_block = BlockchainBlock.query.filter_by(
+            index=block_index,
+            node_id=NODE_ID
+        ).first()
+
+        if not local_block:
+            app.logger.warning(f"Local block #{block_index} not found for node {NODE_ID}")
+            return jsonify({
+                'success': False,
+                'message': f'Блок #{block_index} не найден',
+                'block_index': block_index
+            }), 404
+
+        integrity = verify_block_integrity(local_block)
+        result = {
+            'success': True,
+            'block_index': block_index,
+            'node_id': NODE_ID,
+            'is_valid': integrity['is_valid'],
+            'message': integrity['message'],
+            'hash': local_block.hash,
+            'calculated_hash': integrity.get('calculated_hash', local_block.hash),  # Рассчитанный хэш, если есть
+            'confirmations': local_block.confirmations or []
+        }
+
+        app.logger.debug(f"Verification result for block #{block_index} on node {NODE_ID}: {result}")
+        return jsonify(result)
+
+    except Exception as e:
+        app.logger.error(f"Error in get_block_verification #{block_index}: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': str(e),
+            'block_index': block_index
+        }), 500
+
 @app.route('/verify_block/<int:block_index>')
 @login_required
 def verify_block(block_index):
     try:
         app.logger.debug(f"Verifying block #{block_index} for node {NODE_ID}")
         
-        # 1. Сначала получаем локальную копию блока
+        # 1. Получаем локальную копию блока
         local_block = BlockchainBlock.query.filter_by(
             index=block_index,
             node_id=NODE_ID
@@ -2847,106 +2884,145 @@ def verify_block(block_index):
 
         app.logger.debug(f"Local block #{block_index} found: hash={local_block.hash}, confirmations={local_block.confirmations}")
 
-        # 2. Получаем копии этого блока с других узлов
-        other_blocks = []
-        nodes_to_fetch = [(nid, domain) for nid, domain in NODE_DOMAINS.items() if nid != NODE_ID]
-        app.logger.debug(f"Attempting to fetch block #{block_index} from nodes: {nodes_to_fetch}")
+        # 2. Проверяем целостность локального блока
+        local_integrity = verify_block_integrity(local_block)
+        local_hash = local_block.hash.lower()
+        local_calculated_hash = local_integrity.get('calculated_hash', local_hash).lower()
+        app.logger.debug(f"Local integrity check for block #{block_index}: {local_integrity}")
 
-        async def fetch_all_blocks():
+        # 3. Получаем данные и результаты проверки от других узлов
+        other_blocks = []
+        other_verifications = []
+        nodes_to_fetch = [(nid, domain) for nid, domain in NODE_DOMAINS.items() if nid != NODE_ID]
+        app.logger.debug(f"Attempting to fetch data for block #{block_index} from nodes: {nodes_to_fetch}")
+
+        async def fetch_all_data():
             async with aiohttp.ClientSession() as session:
-                tasks = []
-                for node_id, domain in NODE_DOMAINS.items():
-                    if node_id == NODE_ID:
-                        continue
-                    tasks.append(fetch_block_from_node(session, node_id, domain, block_index))
-                return await asyncio.gather(*tasks, return_exceptions=True)
+                block_tasks = [fetch_block_from_node(session, nid, domain, block_index) for nid, domain in nodes_to_fetch]
+                verification_tasks = [fetch_block_verification_from_node(session, nid, domain, block_index) for nid, domain in nodes_to_fetch]
+                return await asyncio.gather(*(block_tasks + verification_tasks), return_exceptions=True)
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            results = loop.run_until_complete(fetch_all_blocks())
-            for result in results:
+            results = loop.run_until_complete(fetch_all_data())
+            for result in results[:len(nodes_to_fetch)]:  # Блоки
                 if result is not None:
                     other_blocks.append(result)
+            for result in results[len(nodes_to_fetch):]:  # Проверки
+                if result is not None:
+                    other_verifications.append(result)
         finally:
             loop.close()
 
-        app.logger.debug(f"Fetched {len(other_blocks)} other blocks for #{block_index}")
+        app.logger.debug(f"Fetched {len(other_blocks)} blocks and {len(other_verifications)} verifications for #{block_index}")
 
-        # 3. Проверяем целостность локального блока
-        local_integrity = verify_block_integrity(local_block)
-        app.logger.debug(f"Local integrity check for block #{block_index}: {local_integrity}")
-
-        # 4. Сравниваем с другими узлами
-        discrepancies = []
-        consensus_reached = True
-        valid_copies = 1 if local_integrity['is_valid'] else 0  # Локальная копия валидна, если целостность подтверждена
-        local_issue = None
-
-        # Собираем хэши удаленных блоков для определения консенсусного хэша
-        remote_hashes = [remote['data']['hash'].lower() for remote in other_blocks]
-        if remote_hashes:
-            from collections import Counter
-            hash_counts = Counter(remote_hashes)
-            consensus_hash = hash_counts.most_common(1)[0][0] if hash_counts else None
-        else:
-            consensus_hash = None
-
-        # Проверяем локальный блок против консенсусного хэша
-        if consensus_hash and local_block.hash.lower() != consensus_hash:
-            consensus_reached = False
-            local_issue = {
-                'issue': 'hash_mismatch',
-                'expected_hash': consensus_hash,
-                'actual_hash': local_block.hash
-            }
-            discrepancies.append({
+        # 4. Собираем хэши и результаты проверки
+        all_verifications = [
+            {
                 'node_id': NODE_ID,
-                'issue': 'hash_mismatch',
-                'expected_hash': consensus_hash,
-                'actual_hash': local_block.hash
-            })
-
-        for remote in other_blocks:
-            remote_hash = remote['data']['hash'].lower()
-            # Проверяем, совпадает ли хэш с консенсусным
-            if consensus_hash and remote_hash != consensus_hash:
-                consensus_reached = False
-                discrepancies.append({
-                    'node_id': remote['node_id'],
-                    'issue': 'hash_mismatch',
-                    'expected_hash': consensus_hash,
-                    'actual_hash': remote_hash
+                'is_valid': local_integrity['is_valid'],
+                'hash': local_hash,
+                'calculated_hash': local_calculated_hash,
+                'message': local_integrity['message'],
+                'confirmations': local_block.confirmations or []
+            }
+        ]
+        for verification in other_verifications:
+            if verification['data']['success']:
+                all_verifications.append({
+                    'node_id': verification['node_id'],
+                    'is_valid': verification['data']['is_valid'],
+                    'hash': verification['data']['hash'].lower(),
+                    'calculated_hash': verification['data']['calculated_hash'].lower(),
+                    'message': verification['data']['message'],
+                    'confirmations': verification['data']['confirmations']
                 })
 
-            # Проверяем подтверждения
-            remote_conf = remote['data'].get('confirmations', [])
+        app.logger.debug(f"All verifications for block #{block_index}: {all_verifications}")
+
+        # 5. Определяем консенсусный хэш (основываясь на calculated_hash валидных блоков)
+        valid_calculated_hashes = [v['calculated_hash'] for v in all_verifications if v['is_valid']]
+        if valid_calculated_hashes:
+            hash_counts = Counter(valid_calculated_hashes)
+            consensus_hash = hash_counts.most_common(1)[0][0]
+        else:
+            consensus_hash = None
+            app.logger.warning(f"No valid calculated hashes for block #{block_index}")
+
+        app.logger.debug(f"Consensus hash for block #{block_index}: {consensus_hash}")
+
+        # 6. Проверяем расхождения
+        discrepancies = []
+        valid_copies = 0
+        consensus_reached = True
+        local_issue = None
+
+        for verification in all_verifications:
+            node_id = verification['node_id']
+            stored_hash = verification['hash']
+            calculated_hash = verification['calculated_hash']
+            is_valid = verification['is_valid']
+
+            if not is_valid:
+                consensus_reached = False
+                discrepancies.append({
+                    'node_id': node_id,
+                    'issue': 'hash_mismatch',
+                    'expected_hash': calculated_hash,
+                    'actual_hash': stored_hash,
+                    'message': verification['message']
+                })
+                if node_id == NODE_ID:
+                    local_issue = {
+                        'issue': 'hash_mismatch',
+                        'expected_hash': calculated_hash,
+                        'actual_hash': stored_hash,
+                        'message': verification['message']
+                    }
+            elif consensus_hash and stored_hash != consensus_hash:
+                consensus_reached = False
+                discrepancies.append({
+                    'node_id': node_id,
+                    'issue': 'hash_mismatch',
+                    'expected_hash': consensus_hash,
+                    'actual_hash': stored_hash,
+                    'message': 'Хэш не соответствует консенсусу'
+                })
+                if node_id == NODE_ID:
+                    local_issue = {
+                        'issue': 'hash_mismatch',
+                        'expected_hash': consensus_hash,
+                        'actual_hash': stored_hash,
+                        'message': 'Хэш не соответствует консенсусу'
+                    }
+            else:
+                valid_copies += 1
+
+        # 7. Проверяем подтверждения
+        local_conf = local_block.confirmations or []
+        if isinstance(local_conf, str):
+            local_confirmations = set(json.loads(local_conf))
+        else:
+            local_confirmations = set(local_conf)
+
+        for verification in all_verifications:
+            remote_conf = verification['confirmations']
             if isinstance(remote_conf, str):
                 remote_confirmations = set(json.loads(remote_conf))
             else:
                 remote_confirmations = set(remote_conf)
-
-            local_conf = local_block.confirmations or []
-            if isinstance(local_conf, str):
-                local_confirmations = set(json.loads(local_conf))
-            else:
-                local_confirmations = set(local_conf)
             
             if not remote_confirmations.issuperset(local_confirmations):
                 discrepancies.append({
-                    'node_id': remote['node_id'],
+                    'node_id': verification['node_id'],
                     'issue': 'missing_confirmations',
                     'missing_nodes': list(local_confirmations - remote_confirmations)
                 })
 
-            # Если удалённый блок валиден и соответствует консенсусу, увеличиваем счётчик
-            if remote['data'].get('confirmed', False) and (not consensus_hash or remote_hash == consensus_hash):
-                valid_copies += 1
-
-        # 5. Определяем общий статус
+        # 8. Определяем общий статус
         total_nodes = len(NODE_DOMAINS)
         required_confirmations = (total_nodes - 1) // 3 * 2 + 1 if total_nodes > 1 else 1
-        
         is_valid = (
             local_integrity['is_valid'] and 
             valid_copies >= required_confirmations and
@@ -2955,7 +3031,7 @@ def verify_block(block_index):
 
         app.logger.debug(f"Verification result for block #{block_index}: is_valid={is_valid}, valid_copies={valid_copies}, required_confirmations={required_confirmations}, discrepancies={discrepancies}")
 
-        # 6. Формируем результат
+        # 9. Формируем результат
         result = {
             'block_index': block_index,
             'local_block': {
@@ -2964,11 +3040,11 @@ def verify_block(block_index):
                 'message': local_integrity['message'],
                 'confirmations': list(local_confirmations),
                 'node_id': NODE_ID,
-                'issue': local_issue  # Добавляем информацию о проблеме с локальным блоком
+                'issue': local_issue
             },
             'network_status': {
                 'total_nodes': total_nodes,
-                'nodes_checked': len(other_blocks) + 1,
+                'nodes_checked': len(other_verifications) + 1,
                 'valid_copies': valid_copies,
                 'required_confirmations': required_confirmations,
                 'consensus_reached': consensus_reached,
@@ -2977,14 +3053,11 @@ def verify_block(block_index):
             'overall_valid': is_valid
         }
 
-        # Оборачиваем result в список для ключа 'results'
-        result_array = [result]
-
         app.logger.debug(f"Returning result for block #{block_index}: {result}")
 
         return jsonify({
             'success': True,
-            'results': result_array,
+            'results': [result],
             'block_index': block_index
         })
 
