@@ -2893,8 +2893,19 @@ def verify_block(block_index):
                 })
 
             # Проверяем подтверждения
-            remote_confirmations = set(json.loads(remote['data'].get('confirmations', '[]')))
-            local_confirmations = set(json.loads(local_block.confirmations or '[]'))
+            # Обрабатываем remote['data']['confirmations']
+            remote_conf = remote['data'].get('confirmations', [])
+            if isinstance(remote_conf, str):
+                remote_confirmations = set(json.loads(remote_conf))
+            else:
+                remote_confirmations = set(remote_conf)  # Уже список
+
+            # Обрабатываем local_block.confirmations
+            local_conf = local_block.confirmations or []
+            if isinstance(local_conf, str):
+                local_confirmations = set(json.loads(local_conf))
+            else:
+                local_confirmations = set(local_conf)  # Уже список
             
             if not remote_confirmations.issuperset(local_confirmations):
                 discrepancies.append({
@@ -2923,8 +2934,8 @@ def verify_block(block_index):
             'local_block': {
                 'hash': local_block.hash,
                 'is_valid': local_integrity['is_valid'],
-                'message': local_integrity['message'],  # Исправлено: убрана опечатка
-                'confirmations': json.loads(local_block.confirmations or '[]')
+                'message': local_integrity['message'],
+                'confirmations': local_confirmations  # Возвращаем как список
             },
             'network_status': {
                 'total_nodes': total_nodes,
@@ -2942,7 +2953,7 @@ def verify_block(block_index):
 
         return jsonify({
             'success': True,
-            'results': result_array,  # Возвращаем массив под ключом 'results'
+            'results': result_array,
             'block_index': block_index
         })
 
