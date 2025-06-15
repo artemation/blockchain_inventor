@@ -1441,6 +1441,9 @@ class Node:
             transaction_data = json.loads(request_string)
             transaction_data['transaction_hash'] = digest
             current_app.logger.debug(f"Applying transaction {sequence_number} with data: {transaction_data}")
+            current_app.logger.debug(f"Data before hashing: {json.dumps(transaction_data, sort_keys=True, ensure_ascii=False, separators=(',', ':'))}")
+            current_app.logger.debug(f"Timestamp format: {transaction_data['timestamp']}")
+            current_app.logger.debug(f"Applying transaction {sequence_number} with data: {transaction_data}")
     
             with current_app.app_context():
                 # Проверка на существование записи
@@ -2311,105 +2314,99 @@ def admin_create_invitation():
 
 
 def check_data_integrity(record_id, transaction_data=None):
-    """Проверяет целостность данных транзакции с учетом формата timestamp"""
+    """Проверяет целостность данных с точным соответствием формату создания"""
     try:
         record = ПриходРасход.query.get(record_id)
         if not record:
-            return {
-                'success': False,
-                'message': "Запись не найдена",
-                'details': f"Запись с ID {record_id} не существует"
-            }
+            return {'success': False, 'message': "Запись не найдена"}
 
         if not record.TransactionHash:
-            return {
-                'success': False,
-                'message': "Отсутствует хэш транзакции",
-                'details': "Запись не была подтверждена в блокчейне"
-            }
+            return {'success': False, 'message': "Отсутствует хэш транзакции"}
 
-        # Основной вариант проверки - точное совпадение
-        check_data = {
+        # Формируем данные в ТОЧНОМ формате, как при создании
+        transaction_data = {
             'СкладОтправительID': int(record.СкладОтправительID),
             'СкладПолучательID': int(record.СкладПолучательID),
             'ДокументID': int(record.ДокументID),
             'ТоварID': int(record.ТоварID),
             'Количество': float(record.Количество),
             'Единица_ИзмеренияID': int(record.Единица_ИзмеренияID),
-            'timestamp': record.Timestamp.isoformat() if record.Timestamp else None,
+            'timestamp': record.Timestamp.isoformat(timespec='microseconds'),
             'user_id': int(record.user_id)
         }
 
-        # Сериализация с теми же параметрами, что и при создании
-        block_string = json.dumps(
-            check_data,
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(',', ':'),
-            indent=None
+        # Критически важные параметры сериализации:
+        serialized_data = json.dumps(
+            transaction_data,
+            sort_keys=True,          # Должно совпадать с apply_transaction
+            ensure_ascii=False,      # Должно совпадать
+            separators=(',', ':'),   # Без пробелов
+            indent=None              # Без отступов
         ).encode('utf-8')
 
-        computed_hash = hashlib.sha256(block_string).hexdigest()
+        computed_hash = hashlib.sha256(serialized_data).hexdigest()
+
+        # Дебаг-логирование (удалить после отладки)
+        print(f"Computed hash: {computed_hash}")
+        print(f"Stored hash: {record.TransactionHash}")
+        print(f"Serialized data: {serialized_data.decode('utf-8')}")
 
         if computed_hash == record.TransactionHash:
             return {
                 'success': True,
-                'message': "Целостность данных подтверждена",
+                'message': "Целостность подтверждена",
                 'computed_hash': computed_hash,
-                'stored_hash': record.TransactionHash,
-                'data_used': check_data,
-                'serialized_data': block_string.decode('utf-8')
+                'stored_hash': record.TransactionHash
             }
 
-        # Если не совпало, пробуем вариант без микросекунд
-        if record.Timestamp:
-            check_data_no_ms = check_data.copy()
-            check_data_no_ms['timestamp'] = record.Timestamp.replace(microsecond=0).isoformat()
+        # Если не совпадает, пробуем альтернативные варианты
+        variants = [
+            {'name': 'Без микросекунд', 'timespec': 'seconds'},
+            {'name': 'UTC формат', 'modifier': lambda x: x.replace('+00:00', 'Z')},
+            {'name': 'Без timezone', 'modifier': lambda x: x.split('+')[0]}
+        ]
+
+        for variant in variants:
+            modified_data = transaction_data.copy()
+            if 'timespec' in variant:
+                modified_data['timestamp'] = record.Timestamp.isoformat(timespec=variant['timespec'])
+            elif 'modifier' in variant:
+                modified_data['timestamp'] = variant['modifier'](modified_data['timestamp'])
             
-            block_string_no_ms = json.dumps(
-                check_data_no_ms,
+            variant_hash = hashlib.sha256(json.dumps(
+                modified_data,
                 sort_keys=True,
                 ensure_ascii=False,
-                separators=(',', ':'),
-                indent=None
-            ).encode('utf-8')
+                separators=(',', ':')
+            ).encode('utf-8')).hexdigest()
 
-            computed_hash_no_ms = hashlib.sha256(block_string_no_ms).hexdigest()
-
-            if computed_hash_no_ms == record.TransactionHash:
+            if variant_hash == record.TransactionHash:
                 return {
                     'success': True,
-                    'message': "Целостность данных подтверждена (без микросекунд)",
-                    'computed_hash': computed_hash_no_ms,
+                    'message': f"Целостность подтверждена ({variant['name']})",
+                    'computed_hash': variant_hash,
                     'stored_hash': record.TransactionHash
                 }
 
-        # Если все еще не совпало, возвращаем детали
         return {
             'success': False,
-            'message': "Обнаружены расхождения в данных",
+            'message': "Расхождение в хэшах",
             'details': {
                 'computed_hash': computed_hash,
                 'stored_hash': record.TransactionHash,
-                'data_used': check_data,
-                'serialized_data': block_string.decode('utf-8'),
-                'timestamp_used': check_data['timestamp'],
-                'timestamp_in_db': record.Timestamp.isoformat() if record.Timestamp else None,
-                'db_timestamp_raw': str(record.Timestamp)  # Добавляем raw значение из БД
-            },
-            'possible_reasons': [
-                "Разный формат timestamp (микросекунды)",
-                "Разный порядок полей при сериализации",
-                "Разные параметры сериализации JSON",
-                "Проблемы с кодировкой"
-            ]
+                'serialized_data': serialized_data.decode('utf-8'),
+                'timestamp_variants': [
+                    record.Timestamp.isoformat(timespec='microseconds'),
+                    record.Timestamp.isoformat(timespec='seconds'),
+                    str(record.Timestamp)
+                ]
+            }
         }
 
     except Exception as e:
         return {
             'success': False,
-            'message': "Ошибка при проверке целостности",
-            'details': str(e),
+            'message': f"Ошибка: {str(e)}",
             'error_type': type(e).__name__
         }
 
