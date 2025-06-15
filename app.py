@@ -2328,59 +2328,70 @@ def check_data_integrity(record_id, transaction_data=None):
                 'details': "Запись не была подтверждена в блокчейне"
             }
 
-        # Получаем полный timestamp из связанного блока
-        block = BlockchainBlock.query.filter(
-            BlockchainBlock.transactions.contains(f'"TransactionHash":"{record.TransactionHash}"')
-        ).first()
-
-        if not block:
-            return {
-                'success': False,
-                'message': "Блок с транзакцией не найден",
-                'details': f"Не найден блок для TransactionHash {record.TransactionHash}"
-            }
-
-        # Формируем данные с точным timestamp из блока
-        check_data = {
+        # Вариант 1: Проверка с полным timestamp (с микросекундами)
+        check_data_full = {
             'СкладОтправительID': int(record.СкладОтправительID),
             'СкладПолучательID': int(record.СкладПолучательID),
             'ДокументID': int(record.ДокументID),
             'ТоварID': int(record.ТоварID),
             'Количество': float(record.Количество),
             'Единица_ИзмеренияID': int(record.Единица_ИзмеренияID),
-            'timestamp': block.timestamp.isoformat(),  # Используем точное время из блока
+            'timestamp': record.Timestamp.isoformat() if record.Timestamp else None,
             'user_id': int(record.user_id)
         }
 
-        # Сериализация с теми же параметрами, что и при создании
-        block_string = json.dumps(
-            check_data,
+        block_string_full = json.dumps(
+            check_data_full,
             sort_keys=True,
             ensure_ascii=False,
             separators=(',', ':'),
             indent=None
         ).encode('utf-8')
 
-        computed_hash = hashlib.sha256(block_string).hexdigest()
+        computed_hash_full = hashlib.sha256(block_string_full).hexdigest()
 
-        if computed_hash == record.TransactionHash:
+        if computed_hash_full == record.TransactionHash:
             return {
                 'success': True,
-                'message': "Целостность данных подтверждена",
-                'computed_hash': computed_hash,
+                'message': "Целостность данных подтверждена (с микросекундами)",
+                'computed_hash': computed_hash_full,
                 'stored_hash': record.TransactionHash
             }
+
+        # Вариант 2: Проверка без микросекунд (если хэш создавался без них)
+        if record.Timestamp:
+            check_data_no_ms = check_data_full.copy()
+            check_data_no_ms['timestamp'] = record.Timestamp.replace(microsecond=0).isoformat()
+            
+            block_string_no_ms = json.dumps(
+                check_data_no_ms,
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(',', ':'),
+                indent=None
+            ).encode('utf-8')
+
+            computed_hash_no_ms = hashlib.sha256(block_string_no_ms).hexdigest()
+
+            if computed_hash_no_ms == record.TransactionHash:
+                return {
+                    'success': True,
+                    'message': "Целостность данных подтверждена (без микросекунд)",
+                    'computed_hash': computed_hash_no_ms,
+                    'stored_hash': record.TransactionHash
+                }
 
         return {
             'success': False,
             'message': "Обнаружены расхождения в данных",
             'details': {
-                'computed_hash': computed_hash,
+                'computed_hash_full': computed_hash_full,
+                'computed_hash_no_ms': computed_hash_no_ms if 'computed_hash_no_ms' in locals() else None,
                 'stored_hash': record.TransactionHash,
-                'data_used': check_data,
-                'serialized_data': block_string.decode('utf-8'),
-                'block_timestamp': block.timestamp.isoformat(),
-                'record_timestamp': record.Timestamp.isoformat() if record.Timestamp else None
+                'data_used_full': check_data_full,
+                'data_used_no_ms': check_data_no_ms if 'check_data_no_ms' in locals() else None,
+                'serialized_data_full': block_string_full.decode('utf-8'),
+                'serialized_data_no_ms': block_string_no_ms.decode('utf-8') if 'block_string_no_ms' in locals() else None
             }
         }
 
