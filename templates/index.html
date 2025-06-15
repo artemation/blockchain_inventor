@@ -1232,12 +1232,10 @@
                 let resultHtml;
                 
                 if (response.success === true) {
-                    // Успешная проверка - хэши совпадают
                     resultHtml = `
                         <div class="text-center">
                             <i class="fas fa-check-circle fa-4x text-success mb-3"></i>
                             <h5 class="font-weight-bold text-success mb-3">${response.message}</h5>
-                            
                             <div class="bg-light p-3 rounded mt-3 text-left">
                                 <div class="mb-2">
                                     <span class="text-muted">Вычисленный хэш:</span>
@@ -1247,39 +1245,38 @@
                                     <span class="text-muted">Хранимый хэш:</span>
                                     <code class="d-block mt-1">${response.stored_hash}</code>
                                 </div>
-                                <div class="text-center mt-3">
-                                    <button class="btn btn-sm btn-outline-secondary" onclick="copyToClipboard('${response.computed_hash}')">
-                                        <i class="fas fa-copy mr-1"></i> Копировать хэш
-                                    </button>
-                                </div>
                             </div>
                         </div>
                     `;
                 } else {
-                    // Хэши не совпадают - показываем подробности
+                    // Формируем детали ошибки
                     let detailsHtml = `
                         <div class="bg-light p-3 rounded mt-3 text-left">
                             <h6 class="font-weight-bold mb-3">Детали расхождения:</h6>
                             
                             <div class="mb-2">
                                 <span class="text-muted">Вычисленный хэш:</span>
-                                <code class="d-block mt-1">${response.computed_hash || 'N/A'}</code>
+                                <code class="d-block mt-1">${response.details?.computed_hash || 'N/A'}</code>
                             </div>
                             <div class="mb-2">
                                 <span class="text-muted">Хранимый хэш:</span>
-                                <code class="d-block mt-1">${response.stored_hash || 'N/A'}</code>
-                            </div>`;
-    
-                    // Добавляем информацию о timestamp, если есть
-                    if (response.details && response.details.timestamp_used) {
-                        detailsHtml += `
-                            <div class="mb-2">
-                                <span class="text-muted">Использованный timestamp:</span>
-                                <code class="d-block mt-1">${response.details.timestamp_used}</code>
+                                <code class="d-block mt-1">${response.details?.stored_hash || 'N/A'}</code>
                             </div>
                             <div class="mb-2">
-                                <span class="text-muted">Timestamp в БД:</span>
-                                <code class="d-block mt-1">${response.details.timestamp_in_db}</code>
+                                <span class="text-muted">Timestamp в БД (raw):</span>
+                                <code class="d-block mt-1">${response.details?.db_timestamp_raw || 'N/A'}</code>
+                            </div>
+                            <div class="mb-2">
+                                <span class="text-muted">Использованный timestamp:</span>
+                                <code class="d-block mt-1">${response.details?.timestamp_used || 'N/A'}</code>
+                            </div>`;
+    
+                    // Добавляем сериализованные данные
+                    if (response.details?.serialized_data) {
+                        detailsHtml += `
+                            <div class="mt-3">
+                                <h6 class="font-weight-bold">Сериализованные данные:</h6>
+                                <pre class="bg-white p-2 rounded small">${response.details.serialized_data}</pre>
                             </div>`;
                     }
     
@@ -1297,22 +1294,12 @@
                         detailsHtml += `</ul></div>`;
                     }
     
-                    // Добавляем сериализованные данные, если есть
-                    if (response.details && response.details.serialized_data) {
-                        detailsHtml += `
-                            <div class="mt-3">
-                                <h6 class="font-weight-bold">Сериализованные данные:</h6>
-                                <pre class="bg-white p-2 rounded small">${response.details.serialized_data}</pre>
-                            </div>`;
-                    }
-    
                     detailsHtml += `</div>`;
     
                     resultHtml = `
                         <div class="text-center">
                             <i class="fas fa-times-circle fa-4x text-danger mb-3"></i>
                             <h5 class="font-weight-bold text-danger mb-3">${response.message}</h5>
-                            ${response.details && response.details.details ? `<p class="text-muted small">${response.details.details}</p>` : ''}
                             ${detailsHtml}
                         </div>
                     `;
