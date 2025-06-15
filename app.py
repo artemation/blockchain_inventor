@@ -2815,12 +2815,9 @@ def verify_block(block_index):
 
         # 2. Получаем копии этого блока с других узлов
         other_blocks = []
-        
-        # Логируем узлы, к которым будем обращаться
         nodes_to_fetch = [(nid, domain) for nid, domain in NODE_DOMAINS.items() if nid != NODE_ID]
         app.logger.debug(f"Attempting to fetch block #{block_index} from nodes: {nodes_to_fetch}")
 
-        # Создаем асинхронную сессию aiohttp
         async def fetch_all_blocks():
             async with aiohttp.ClientSession() as session:
                 tasks = []
@@ -2830,7 +2827,6 @@ def verify_block(block_index):
                     tasks.append(fetch_block_from_node(session, node_id, domain, block_index))
                 return await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Выполняем асинхронные запросы в синхронном контексте
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -2850,17 +2846,43 @@ def verify_block(block_index):
         # 4. Сравниваем с другими узлами
         discrepancies = []
         consensus_reached = True
-        valid_copies = 1  # Локальная копия изначально считается валидной
+        valid_copies = 1 if local_integrity['is_valid'] else 0  # Локальная копия валидна, если целостность подтверждена
+        local_issue = None
+
+        # Собираем хэши удаленных блоков для определения консенсусного хэша
+        remote_hashes = [remote['data']['hash'].lower() for remote in other_blocks]
+        if remote_hashes:
+            from collections import Counter
+            hash_counts = Counter(remote_hashes)
+            consensus_hash = hash_counts.most_common(1)[0][0] if hash_counts else None
+        else:
+            consensus_hash = None
+
+        # Проверяем локальный блок против консенсусного хэша
+        if consensus_hash and local_block.hash.lower() != consensus_hash:
+            consensus_reached = False
+            local_issue = {
+                'issue': 'hash_mismatch',
+                'expected_hash': consensus_hash,
+                'actual_hash': local_block.hash
+            }
+            discrepancies.append({
+                'node_id': NODE_ID,
+                'issue': 'hash_mismatch',
+                'expected_hash': consensus_hash,
+                'actual_hash': local_block.hash
+            })
 
         for remote in other_blocks:
-            # Проверяем, совпадает ли хэш с локальным
-            if remote['data']['hash'].lower() != local_block.hash.lower():
+            remote_hash = remote['data']['hash'].lower()
+            # Проверяем, совпадает ли хэш с консенсусным
+            if consensus_hash and remote_hash != consensus_hash:
                 consensus_reached = False
                 discrepancies.append({
                     'node_id': remote['node_id'],
                     'issue': 'hash_mismatch',
-                    'expected_hash': local_block.hash,
-                    'actual_hash': remote['data']['hash']
+                    'expected_hash': consensus_hash,
+                    'actual_hash': remote_hash
                 })
 
             # Проверяем подтверждения
@@ -2883,8 +2905,8 @@ def verify_block(block_index):
                     'missing_nodes': list(local_confirmations - remote_confirmations)
                 })
 
-            # Если удалённый блок валиден, увеличиваем счётчик
-            if remote['data'].get('confirmed', False):
+            # Если удалённый блок валиден и соответствует консенсусу, увеличиваем счётчик
+            if remote['data'].get('confirmed', False) and (not consensus_hash or remote_hash == consensus_hash):
                 valid_copies += 1
 
         # 5. Определяем общий статус
@@ -2897,7 +2919,7 @@ def verify_block(block_index):
             consensus_reached
         )
 
-        app.logger.debug(f"Verification result for block #{block_index}: is_valid={is_valid}, valid_copies={valid_copies}, required_confirmations={required_confirmations}")
+        app.logger.debug(f"Verification result for block #{block_index}: is_valid={is_valid}, valid_copies={valid_copies}, required_confirmations={required_confirmations}, discrepancies={discrepancies}")
 
         # 6. Формируем результат
         result = {
@@ -2907,7 +2929,8 @@ def verify_block(block_index):
                 'is_valid': local_integrity['is_valid'],
                 'message': local_integrity['message'],
                 'confirmations': list(local_confirmations),
-                'node_id': NODE_ID
+                'node_id': NODE_ID,
+                'issue': local_issue  # Добавляем информацию о проблеме с локальным блоком
             },
             'network_status': {
                 'total_nodes': total_nodes,
