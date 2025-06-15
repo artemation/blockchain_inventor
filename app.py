@@ -2815,9 +2815,10 @@ def debug_blockchain():
 
 @app.route('/verify_block/<int:block_index>')
 @login_required
-def verify_block(block_index):
+async def verify_block(block_index):
+    """Асинхронная проверка целостности блока с использованием aiohttp"""
     try:
-        # 1. Сначала получаем локальную копию блока
+        # 1. Получаем локальную копию блока
         local_block = BlockchainBlock.query.filter_by(
             index=block_index,
             node_id=NODE_ID
@@ -2830,24 +2831,29 @@ def verify_block(block_index):
                 'block_index': block_index
             }), 404
 
-        # 2. Получаем копии этого блока с других узлов
+        # 2. Асинхронно получаем копии с других узлов
         other_blocks = []
-        for node_id, domain in NODE_DOMAINS.items():
-            if node_id == NODE_ID:
-                continue
-
-            try:
+        async with aiohttp.ClientSession() as session:
+            tasks = []
+            for node_id, domain in NODE_DOMAINS.items():
+                if node_id == NODE_ID:
+                    continue
                 url = f"https://{domain}/get_block/{block_index}"
-                response = requests.get(url, timeout=3)
-                if response.status_code == 200:
-                    block_data = response.json()
+                tasks.append(fetch_block(session, url, node_id))
+            
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            for result in results:
+                if isinstance(result, Exception):
+                    app.logger.error(f"Error fetching block: {str(result)}")
+                    continue
+                node_id, block_data = result
+                if block_data:
                     other_blocks.append({
                         'node_id': node_id,
                         'data': block_data,
                         'source': 'remote'
                     })
-            except Exception as e:
-                app.logger.error(f"Error fetching block from node {node_id}: {str(e)}")
 
         # 3. Проверяем целостность локального блока
         local_integrity = verify_block_integrity(local_block)
@@ -2869,7 +2875,7 @@ def verify_block(block_index):
                 })
 
             # Проверяем подтверждения
-            remote_confirmations = set(json.loads(remote['data'].get('confirmations', '[]')))
+            remote_confirmations = set(remote['data'].get('confirmations', []))
             local_confirmations = set(json.loads(local_block.confirmations or '[]'))
             
             if not remote_confirmations.issuperset(local_confirmations):
@@ -2926,6 +2932,18 @@ def verify_block(block_index):
             'message': str(e),
             'block_index': block_index
         }), 500
+        
+
+async def fetch_block(session, url, node_id):
+    """Вспомогательная функция для асинхронного получения блока"""
+    try:
+        async with session.get(url, timeout=3) as response:
+            if response.status == 200:
+                block_data = await response.json()
+                return node_id, block_data
+            return node_id, None
+    except Exception as e:
+        raise Exception(f"Node {node_id} error: {str(e)}")
 
 
 def verify_block_integrity(block):
