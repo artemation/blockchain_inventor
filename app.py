@@ -2311,7 +2311,7 @@ def admin_create_invitation():
 
 
 def check_data_integrity(record_id, transaction_data=None):
-    """Проверяет целостность данных транзакции с точной сериализацией"""
+    """Проверяет целостность данных транзакции с учетом микросекунд"""
     try:
         record = ПриходРасход.query.get(record_id)
         if not record:
@@ -2328,7 +2328,19 @@ def check_data_integrity(record_id, transaction_data=None):
                 'details': "Запись не была подтверждена в блокчейне"
             }
 
-        # Формируем данные в ТОЧНОМ порядке и формате, как при создании транзакции
+        # Получаем полный timestamp из связанного блока
+        block = BlockchainBlock.query.filter(
+            BlockchainBlock.transactions.contains(f'"TransactionHash":"{record.TransactionHash}"')
+        ).first()
+
+        if not block:
+            return {
+                'success': False,
+                'message': "Блок с транзакцией не найден",
+                'details': f"Не найден блок для TransactionHash {record.TransactionHash}"
+            }
+
+        # Формируем данные с точным timestamp из блока
         check_data = {
             'СкладОтправительID': int(record.СкладОтправительID),
             'СкладПолучательID': int(record.СкладПолучательID),
@@ -2336,17 +2348,17 @@ def check_data_integrity(record_id, transaction_data=None):
             'ТоварID': int(record.ТоварID),
             'Количество': float(record.Количество),
             'Единица_ИзмеренияID': int(record.Единица_ИзмеренияID),
-            'timestamp': record.Timestamp.isoformat() if record.Timestamp else None,
+            'timestamp': block.timestamp.isoformat(),  # Используем точное время из блока
             'user_id': int(record.user_id)
         }
 
-        # Сериализация с теми же параметрами, что и при создании транзакции
+        # Сериализация с теми же параметрами, что и при создании
         block_string = json.dumps(
             check_data,
-            sort_keys=True,          # Сортировка ключей
-            ensure_ascii=False,      # Не экранировать Unicode
-            separators=(',', ':'),   # Без пробелов
-            indent=None              # Без отступов
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(',', ':'),
+            indent=None
         ).encode('utf-8')
 
         computed_hash = hashlib.sha256(block_string).hexdigest()
@@ -2359,19 +2371,6 @@ def check_data_integrity(record_id, transaction_data=None):
                 'stored_hash': record.TransactionHash
             }
 
-        # Дополнительная проверка: возможно, в БД хранится хэш без microseconds
-        if record.Timestamp:
-            check_data['timestamp'] = record.Timestamp.replace(microsecond=0).isoformat()
-            block_string = json.dumps(check_data, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
-            computed_hash = hashlib.sha256(block_string).hexdigest()
-            if computed_hash == record.TransactionHash:
-                return {
-                    'success': True,
-                    'message': "Целостность подтверждена (без microseconds)",
-                    'computed_hash': computed_hash,
-                    'stored_hash': record.TransactionHash
-                }
-
         return {
             'success': False,
             'message': "Обнаружены расхождения в данных",
@@ -2379,7 +2378,9 @@ def check_data_integrity(record_id, transaction_data=None):
                 'computed_hash': computed_hash,
                 'stored_hash': record.TransactionHash,
                 'data_used': check_data,
-                'serialized_data': block_string.decode('utf-8')
+                'serialized_data': block_string.decode('utf-8'),
+                'block_timestamp': block.timestamp.isoformat(),
+                'record_timestamp': record.Timestamp.isoformat() if record.Timestamp else None
             }
         }
 
@@ -2765,22 +2766,25 @@ async def fetch_block_from_node(session, node_id, domain, block_index):
         async with session.get(url, timeout=3) as response:
             if response.status == 200:
                 block_data = await response.json()
+                app.logger.debug(f"Fetched block #{block_index} from node {node_id}: {block_data}")
                 return {
                     'node_id': node_id,
                     'data': block_data,
                     'source': 'remote'
                 }
             else:
-                app.logger.error(f"Error fetching block from node {node_id}: HTTP {response.status}")
+                app.logger.error(f"Error fetching block #{block_index} from node {node_id}: HTTP {response.status}")
                 return None
     except Exception as e:
-        app.logger.error(f"Error fetching block from node {node_id}: {str(e)}")
+        app.logger.error(f"Error fetching block #{block_index} from node {node_id}: {str(e)}")
         return None
 
 @app.route('/verify_block/<int:block_index>')
 @login_required
 def verify_block(block_index):
     try:
+        app.logger.debug(f"Verifying block #{block_index} for node {NODE_ID}")
+        
         # 1. Сначала получаем локальную копию блока
         local_block = BlockchainBlock.query.filter_by(
             index=block_index,
@@ -2788,15 +2792,23 @@ def verify_block(block_index):
         ).first()
 
         if not local_block:
+            app.logger.warning(f"Local block #{block_index} not found for node {NODE_ID}")
             return jsonify({
                 'success': False,
                 'message': f'Локальная копия блока #{block_index} не найдена',
-                'block_index': block_index
+                'block_index': block_index,
+                'results': []
             }), 404
+
+        app.logger.debug(f"Local block #{block_index} found: hash={local_block.hash}, confirmations={local_block.confirmations}")
 
         # 2. Получаем копии этого блока с других узлов
         other_blocks = []
         
+        # Логируем узлы, к которым будем обращаться
+        nodes_to_fetch = [(nid, domain) for nid, domain in NODE_DOMAINS.items() if nid != NODE_ID]
+        app.logger.debug(f"Attempting to fetch block #{block_index} from nodes: {nodes_to_fetch}")
+
         # Создаем асинхронную сессию aiohttp
         async def fetch_all_blocks():
             async with aiohttp.ClientSession() as session:
@@ -2818,9 +2830,12 @@ def verify_block(block_index):
         finally:
             loop.close()
 
+        app.logger.debug(f"Fetched {len(other_blocks)} other blocks for #{block_index}")
+
         # 3. Проверяем целостность локального блока
         local_integrity = verify_block_integrity(local_block)
-        
+        app.logger.debug(f"Local integrity check for block #{block_index}: {local_integrity}")
+
         # 4. Сравниваем с другими узлами
         discrepancies = []
         consensus_reached = True
@@ -2838,25 +2853,23 @@ def verify_block(block_index):
                 })
 
             # Проверяем подтверждения
-            # Обрабатываем remote['data']['confirmations']
             remote_conf = remote['data'].get('confirmations', [])
             if isinstance(remote_conf, str):
                 remote_confirmations = set(json.loads(remote_conf))
             else:
-                remote_confirmations = set(remote_conf)  # Уже список
+                remote_confirmations = set(remote_conf)
 
-            # Обрабатываем local_block.confirmations
             local_conf = local_block.confirmations or []
             if isinstance(local_conf, str):
                 local_confirmations = set(json.loads(local_conf))
             else:
-                local_confirmations = set(local_conf)  # Уже список
+                local_confirmations = set(local_conf)
             
             if not remote_confirmations.issuperset(local_confirmations):
                 discrepancies.append({
                     'node_id': remote['node_id'],
                     'issue': 'missing_confirmations',
-                    'missing_nodes': list(local_confirmations - remote_confirmations)  # Преобразуем set в list
+                    'missing_nodes': list(local_confirmations - remote_confirmations)
                 })
 
             # Если удалённый блок валиден, увеличиваем счётчик
@@ -2865,13 +2878,15 @@ def verify_block(block_index):
 
         # 5. Определяем общий статус
         total_nodes = len(NODE_DOMAINS)
-        required_confirmations = (total_nodes - 1) // 3 * 2 + 1
+        required_confirmations = (total_nodes - 1) // 3 * 2 + 1 if total_nodes > 1 else 1
         
         is_valid = (
             local_integrity['is_valid'] and 
             valid_copies >= required_confirmations and
             consensus_reached
         )
+
+        app.logger.debug(f"Verification result for block #{block_index}: is_valid={is_valid}, valid_copies={valid_copies}, required_confirmations={required_confirmations}")
 
         # 6. Формируем результат
         result = {
@@ -2880,7 +2895,8 @@ def verify_block(block_index):
                 'hash': local_block.hash,
                 'is_valid': local_integrity['is_valid'],
                 'message': local_integrity['message'],
-                'confirmations': list(local_confirmations)  # Преобразуем set в list для JSON
+                'confirmations': list(local_confirmations),
+                'node_id': NODE_ID
             },
             'network_status': {
                 'total_nodes': total_nodes,
@@ -2896,6 +2912,8 @@ def verify_block(block_index):
         # Оборачиваем result в список для ключа 'results'
         result_array = [result]
 
+        app.logger.debug(f"Returning result for block #{block_index}: {result}")
+
         return jsonify({
             'success': True,
             'results': result_array,
@@ -2903,11 +2921,12 @@ def verify_block(block_index):
         })
 
     except Exception as e:
-        app.logger.error(f"Error in verify_block: {str(e)}")
+        app.logger.error(f"Error in verify_block #{block_index}: {str(e)}")
         return jsonify({
             'success': False,
             'message': str(e),
-            'block_index': block_index
+            'block_index': block_index,
+            'results': []
         }), 500
         
 
