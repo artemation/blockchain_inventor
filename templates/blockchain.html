@@ -880,88 +880,77 @@
                 dataType: 'json',
                 success: function(data) {
                     let resultHtml = '';
-                    if (data.success && data.results && data.results.length > 0) {
-                        data.results.forEach(result => {
-                            // Определение статуса блока
-                            const isGenesis = result.block_index === 0;
-                            const isValid = result.overall_valid;
-                            const nodeId = result.local_block.node_id || 'Неизвестно';
-                            const hash = result.local_block.hash ? 
-                                `${result.local_block.hash.slice(0, 8)}...${result.local_block.hash.slice(-8)}` : 
-                                'Неизвестно';
+                    if (data.success) {
+                        // Проверка целостности блока
+                        const isGenesis = blockIndex === 0;
+                        const isValid = data.overall_valid;
+                        const integrity = data.integrity_check;
+                        
+                        let statusHtml, cardClass;
+                        if (isGenesis) {
+                            statusHtml = `<span class="badge badge-info">Генезис-блок</span>`;
+                            cardClass = 'border-info';
+                        } else if (isValid) {
+                            statusHtml = `<span class="badge badge-success">Достоверен</span>`;
+                            cardClass = 'border-success';
+                        } else {
+                            statusHtml = `<span class="badge badge-danger">Недостоверен</span>`;
+                            cardClass = 'border-danger';
+                        }
+    
+                        // Формируем HTML для транзакций
+                        let transactionsHtml = '';
+                        if (data.transactions_verified && data.transactions_verified.length > 0) {
+                            transactionsHtml = '<div class="mt-3"><h6>Проверка транзакций:</h6><ul class="list-group">';
                             
-                            let message = result.local_block.message || 'Нет информации';
-                            let statusHtml, cardClass;
-    
-                            if (isGenesis) {
-                                // Особый статус для генезис-блока
-                                statusHtml = `<span class="badge badge-info">Генезис-блок</span>`;
-                                cardClass = 'border-info';
-                                message = 'Специальные правила для генезис-блока';
-                            } else if (isValid) {
-                                statusHtml = `<span class="badge badge-success">Достоверен</span>`;
-                                cardClass = 'border-success';
-                            } else {
-                                statusHtml = `<span class="badge badge-danger">Недостоверен</span>`;
-                                cardClass = 'border-danger';
+                            data.transactions_verified.forEach(tx => {
+                                const txStatus = tx.record_exists && tx.data_match;
+                                const txClass = txStatus ? 'list-group-item-success' : 'list-group-item-danger';
+                                const txIcon = txStatus ? 'fa-check' : 'fa-times';
+                                const txShortHash = tx.transaction_hash ? 
+                                    `${tx.transaction_hash.slice(0, 8)}...${tx.transaction_hash.slice(-8)}` : 
+                                    'Без хэша';
                                 
-                                // Детализация проблемы
-                                if (result.local_block.issue) {
-                                    message = result.local_block.issue.message || 
-                                        `Ожидался хэш: ${result.local_block.issue.expected_hash?.slice(0,8)}...${result.local_block.issue.expected_hash?.slice(-8) || ''}`;
+                                let txDetails = '';
+                                if (!tx.record_exists) {
+                                    txDetails = '<small class="text-danger">Запись не найдена в ПриходРасход</small>';
+                                } else if (!tx.data_match) {
+                                    txDetails = '<small class="text-danger">Данные не соответствуют</small>';
                                 }
-                            }
+                                
+                                transactionsHtml += `
+                                    <li class="list-group-item ${txClass}">
+                                        <i class="fas ${txIcon} mr-2"></i>
+                                        ${txShortHash}
+                                        ${txDetails}
+                                    </li>
+                                `;
+                            });
+                            
+                            transactionsHtml += '</ul></div>';
+                        }
     
-                            // Подтверждения
-                            const confirmations = result.local_block.confirmations ? 
-                                result.local_block.confirmations.length : 0;
-                            const totalNodes = result.network_status?.total_nodes || 1;
-                            const confirmationsText = `${confirmations}/${totalNodes}`;
-    
-                            // Расхождения между узлами
-                            let discrepanciesHtml = '';
-                            if (result.network_status?.discrepancies?.length > 0) {
-                                discrepanciesHtml = '<div class="mt-2"><small><strong>Расхождения:</strong><ul>';
-                                result.network_status.discrepancies.forEach(d => {
-                                    const nodeMsg = d.message || 
-                                        `Хэш: ${d.actual_hash?.slice(0,8)}... вместо ${d.expected_hash?.slice(0,8)}...`;
-                                    discrepanciesHtml += `<li>Узел ${d.node_id}: ${nodeMsg}</li>`;
-                                });
-                                discrepanciesHtml += '</ul></small></div>';
-                            }
-    
-                            // Формируем карточку результата
-                            resultHtml = `
-                                <div class="card mb-3 ${cardClass}">
-                                    <div class="card-body">
-                                        <h5 class="card-title">
-                                            Блок #${result.block_index} 
-                                            <small class="text-muted">(Узел ${nodeId})</small>
-                                        </h5>
-                                        <div class="d-flex align-items-center mb-2">
-                                            ${statusHtml}
-                                            <span class="ml-2">${message}</span>
-                                        </div>
-                                        <div class="row">
-                                            <div class="col-md-6">
-                                                <p class="mb-1"><small><strong>Хэш:</strong> <code>${hash}</code></small></p>
-                                            </div>
-                                            <div class="col-md-6">
-                                                <p class="mb-1"><small><strong>Подтверждения:</strong> ${confirmationsText}</small></p>
-                                            </div>
-                                        </div>
-                                        ${discrepanciesHtml}
+                        resultHtml = `
+                            <div class="card mb-3 ${cardClass}">
+                                <div class="card-body">
+                                    <h5 class="card-title">
+                                        Блок #${blockIndex}
+                                    </h5>
+                                    <div class="d-flex align-items-center mb-2">
+                                        ${statusHtml}
+                                        <span class="ml-2">${integrity.message}</span>
                                     </div>
+                                    ${transactionsHtml}
                                 </div>
-                            `;
-                        });
+                            </div>
+                        `;
                     } else {
-                        // Обработка ошибки при проверке
                         resultHtml = `
                             <div class="card mb-3 border-danger">
                                 <div class="card-body">
                                     <h5 class="card-title">Блок #${blockIndex}</h5>
-                                    <p class="text-danger"><i class="fas fa-exclamation-circle mr-2"></i>
+                                    <p class="text-danger">
+                                        <i class="fas fa-exclamation-circle mr-2"></i>
                                         ${data.message || 'Неизвестная ошибка при проверке'}
                                     </p>
                                 </div>
@@ -980,7 +969,8 @@
                         <div class="card mb-3 border-danger">
                             <div class="card-body">
                                 <h5 class="card-title">Блок #${blockIndex}</h5>
-                                <p class="text-danger"><i class="fas fa-exclamation-circle mr-2"></i>
+                                <p class="text-danger">
+                                    <i class="fas fa-exclamation-circle mr-2"></i>
                                     Ошибка запроса: ${error || 'Неизвестная ошибка'}
                                 </p>
                             </div>
