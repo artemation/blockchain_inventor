@@ -848,6 +848,96 @@
         let verifiedBlocks = 0;
         let results = [];
     
+        // Функция для форматирования результатов проверки
+        function formatVerificationResult(result) {
+            const isGenesis = result.block_index === 0;
+            const isValid = result.overall_valid;
+            const nodeId = result.local_block.node_id || 'Неизвестно';
+            const hash = result.local_block.hash ? 
+                `${result.local_block.hash.slice(0, 8)}...${result.local_block.hash.slice(-8)}` : 
+                'Неизвестно';
+            
+            let message = result.local_block.message || 'Нет информации';
+            let statusHtml, cardClass;
+    
+            if (isGenesis) {
+                statusHtml = `<span class="badge badge-info">Генезис-блок</span>`;
+                cardClass = 'border-info';
+                message = 'Специальные правила для генезис-блока';
+            } else if (isValid) {
+                statusHtml = `<span class="badge badge-success">Достоверен</span>`;
+                cardClass = 'border-success';
+            } else {
+                statusHtml = `<span class="badge badge-danger">Недостоверен</span>`;
+                cardClass = 'border-danger';
+                
+                if (result.local_block.issue) {
+                    message = result.local_block.issue.message || 
+                        `Ожидался хэш: ${result.local_block.issue.expected_hash?.slice(0,8)}...`;
+                }
+            }
+    
+            // Подтверждения
+            const confirmations = result.local_block.confirmations ? 
+                result.local_block.confirmations.length : 0;
+            const totalNodes = result.network_status?.total_nodes || 1;
+            const confirmationsText = `${confirmations}/${totalNodes}`;
+    
+            // Глобальные проблемы в сети
+            let globalIssuesHtml = '';
+            if (result.network_status?.global_issues?.length > 0) {
+                globalIssuesHtml = '<div class="mt-3"><div class="alert alert-warning py-2"><small>';
+                globalIssuesHtml += '<strong><i class="fas fa-exclamation-triangle mr-1"></i>Проблемы в сети:</strong><ul class="mb-0">';
+                
+                result.network_status.global_issues.forEach(issue => {
+                    let issueText = issue.message;
+                    if (issue.expected_hash) {
+                        issueText += ` (ожидался: ${issue.expected_hash.slice(0,8)}...)`;
+                    }
+                    globalIssuesHtml += `<li>Узел ${issue.node_id}: ${issueText}</li>`;
+                });
+                
+                globalIssuesHtml += '</ul></small></div></div>';
+            }
+    
+            // Локальные расхождения
+            let discrepanciesHtml = '';
+            if (result.network_status?.discrepancies?.length > 0) {
+                discrepanciesHtml = '<div class="mt-2"><small><strong>Локальные расхождения:</strong><ul>';
+                result.network_status.discrepancies.forEach(d => {
+                    const nodeMsg = d.message || 
+                        `Хэш: ${d.actual_hash?.slice(0,8)}... вместо ${d.expected_hash?.slice(0,8)}...`;
+                    discrepanciesHtml += `<li>Узел ${d.node_id}: ${nodeMsg}</li>`;
+                });
+                discrepanciesHtml += '</ul></small></div>';
+            }
+    
+            return `
+                <div class="card mb-3 ${cardClass}">
+                    <div class="card-body">
+                        <h5 class="card-title">
+                            Блок #${result.block_index} 
+                            <small class="text-muted">(Узел ${nodeId})</small>
+                        </h5>
+                        <div class="d-flex align-items-center mb-2">
+                            ${statusHtml}
+                            <span class="ml-2">${message}</span>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <p class="mb-1"><small><strong>Хэш:</strong> <code>${hash}</code></small></p>
+                            </div>
+                            <div class="col-md-6">
+                                <p class="mb-1"><small><strong>Подтверждения:</strong> ${confirmationsText}</small></p>
+                            </div>
+                        </div>
+                        ${discrepanciesHtml}
+                        ${globalIssuesHtml}
+                    </div>
+                </div>
+            `;
+        }
+    
         function processVerification() {
             if (verifiedBlocks === totalBlocks) {
                 // Сортируем результаты по номеру блока
@@ -875,85 +965,14 @@
             const blockIndex = $(this).data('block-index');
     
             $.ajax({
-                url: `/verify_block/${blockIndex}`,
+                url: `/verify_block/${blockIndex}?full_check=true`,
                 method: 'GET',
                 dataType: 'json',
                 success: function(data) {
                     let resultHtml = '';
                     if (data.success && data.results && data.results.length > 0) {
                         data.results.forEach(result => {
-                            // Определение статуса блока
-                            const isGenesis = result.block_index === 0;
-                            const isValid = result.overall_valid;
-                            const nodeId = result.local_block.node_id || 'Неизвестно';
-                            const hash = result.local_block.hash ? 
-                                `${result.local_block.hash.slice(0, 8)}...${result.local_block.hash.slice(-8)}` : 
-                                'Неизвестно';
-                            
-                            let message = result.local_block.message || 'Нет информации';
-                            let statusHtml, cardClass;
-    
-                            if (isGenesis) {
-                                // Особый статус для генезис-блока
-                                statusHtml = `<span class="badge badge-info">Генезис-блок</span>`;
-                                cardClass = 'border-info';
-                                message = 'Специальные правила для генезис-блока';
-                            } else if (isValid) {
-                                statusHtml = `<span class="badge badge-success">Достоверен</span>`;
-                                cardClass = 'border-success';
-                            } else {
-                                statusHtml = `<span class="badge badge-danger">Недостоверен</span>`;
-                                cardClass = 'border-danger';
-                                
-                                // Детализация проблемы
-                                if (result.local_block.issue) {
-                                    message = result.local_block.issue.message || 
-                                        `Ожидался хэш: ${result.local_block.issue.expected_hash?.slice(0,8)}...${result.local_block.issue.expected_hash?.slice(-8) || ''}`;
-                                }
-                            }
-    
-                            // Подтверждения
-                            const confirmations = result.local_block.confirmations ? 
-                                result.local_block.confirmations.length : 0;
-                            const totalNodes = result.network_status?.total_nodes || 1;
-                            const confirmationsText = `${confirmations}/${totalNodes}`;
-    
-                            // Расхождения между узлами
-                            let discrepanciesHtml = '';
-                            if (result.network_status?.discrepancies?.length > 0) {
-                                discrepanciesHtml = '<div class="mt-2"><small><strong>Расхождения:</strong><ul>';
-                                result.network_status.discrepancies.forEach(d => {
-                                    const nodeMsg = d.message || 
-                                        `Хэш: ${d.actual_hash?.slice(0,8)}... вместо ${d.expected_hash?.slice(0,8)}...`;
-                                    discrepanciesHtml += `<li>Узел ${d.node_id}: ${nodeMsg}</li>`;
-                                });
-                                discrepanciesHtml += '</ul></small></div>';
-                            }
-    
-                            // Формируем карточку результата
-                            resultHtml = `
-                                <div class="card mb-3 ${cardClass}">
-                                    <div class="card-body">
-                                        <h5 class="card-title">
-                                            Блок #${result.block_index} 
-                                            <small class="text-muted">(Узел ${nodeId})</small>
-                                        </h5>
-                                        <div class="d-flex align-items-center mb-2">
-                                            ${statusHtml}
-                                            <span class="ml-2">${message}</span>
-                                        </div>
-                                        <div class="row">
-                                            <div class="col-md-6">
-                                                <p class="mb-1"><small><strong>Хэш:</strong> <code>${hash}</code></small></p>
-                                            </div>
-                                            <div class="col-md-6">
-                                                <p class="mb-1"><small><strong>Подтверждения:</strong> ${confirmationsText}</small></p>
-                                            </div>
-                                        </div>
-                                        ${discrepanciesHtml}
-                                    </div>
-                                </div>
-                            `;
+                            resultHtml = formatVerificationResult(result);
                         });
                     } else {
                         // Обработка ошибки при проверке
@@ -993,7 +1012,7 @@
         });
     }
     
-    // Обработчик проверки отдельного блока (аналогичные улучшения)
+    // Обработчик проверки отдельного блока
     function verifySingleBlock(blockIndex) {
         const verificationResults = $('#verificationResults');
         verificationResults.html(`
@@ -1005,7 +1024,7 @@
         $('#verificationModal').modal('show');
     
         $.ajax({
-            url: `/verify_block/${blockIndex}`,
+            url: `/verify_block/${blockIndex}?full_check=true`,
             method: 'GET',
             dataType: 'json',
             success: function(data) {
@@ -1013,8 +1032,7 @@
                 
                 if (data.success && data.results?.length > 0) {
                     data.results.forEach(result => {
-                        // Та же логика форматирования, что и в verifyBlockchain()
-                        // ...
+                        html += formatVerificationResult(result);
                     });
                 } else {
                     html += `
