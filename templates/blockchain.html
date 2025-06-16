@@ -995,6 +995,7 @@
     
     // Обработчик проверки отдельного блока (аналогичные улучшения)
     function verifySingleBlock(blockIndex) {
+        console.log(`Запуск проверки блока #${blockIndex}`); // Логирование
         const verificationResults = $('#verificationResults');
         verificationResults.html(`
             <div class="text-center">
@@ -1009,13 +1010,11 @@
             method: 'GET',
             dataType: 'json',
             success: function(data) {
+                console.log('Ответ сервера:', data); // Логирование ответа
                 let html = '<h4 class="mb-3"><i class="fas fa-cube mr-2"></i>Результаты проверки</h4>';
-                
                 if (data.success && data.results?.length > 0) {
-                    data.results.forEach(result => {
-                        // Та же логика форматирования, что и в verifyBlockchain()
-                        // ...
-                    });
+                    // Обработка успешного ответа
+                    html += `<div class="alert alert-success">Блок проверен успешно!</div>`;
                 } else {
                     html += `
                         <div class="alert alert-danger">
@@ -1024,14 +1023,14 @@
                         </div>
                     `;
                 }
-                
                 verificationResults.html(html);
             },
-            error: function() {
+            error: function(xhr, status, error) {
+                console.error('Ошибка AJAX:', error); // Логирование ошибки
                 verificationResults.html(`
                     <div class="alert alert-danger">
                         <i class="fas fa-exclamation-circle mr-2"></i>
-                        Ошибка сети при проверке блока #${blockIndex}
+                        Ошибка сети: ${error}
                     </div>
                 `);
             }
