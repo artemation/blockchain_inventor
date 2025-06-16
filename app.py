@@ -28,6 +28,7 @@ from functools import wraps
 from threading import Lock
 import atexit
 from tenacity import retry, stop_after_attempt, wait_fixed
+from collections import Counter
 
 load_dotenv()
 
