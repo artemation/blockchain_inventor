@@ -2990,11 +2990,7 @@ def verify_block(block_index):
         # 8. Определяем общий статус
         total_nodes = len(NODE_DOMAINS)
         required_confirmations = (total_nodes - 1) // 3 * 2 + 1 if total_nodes > 1 else 1
-        is_valid = (
-            local_integrity['is_valid'] and 
-            valid_copies >= required_confirmations and
-            consensus_reached
-        )
+        is_valid = local_integrity['is_valid'] and consensus_reached
 
         app.logger.debug(f"Verification result for block #{block_index}: is_valid={is_valid}, valid_copies={valid_copies}, required_confirmations={required_confirmations}, discrepancies={discrepancies}")
 
@@ -3051,31 +3047,72 @@ async def fetch_block(session, url, node_id):
 
 
 def verify_block_integrity(block):
-    """Проверяет целостность одного блока"""
+    """
+    Проверяет целостность блока, включая:
+    - Корректность хэша блока
+    - Связь с предыдущим блоком (кроме генезис-блока)
+    - Достаточность подтверждений от других узлов
+    - Корректность структуры данных
+
+    Args:
+        block: Объект блока из базы данных (BlockchainBlock)
+
+    Returns:
+        dict: Результат проверки в формате:
+        {
+            'is_valid': bool,       # Общий результат проверки
+            'message': str,         # Описание результата
+            'calculated_hash': str,  # Рассчитанный хэш (для сравнения)
+            'issue_type': str       # Тип проблемы (опционально)
+        }
+    """
     try:
-        # Для генезис-блока
+        # 1. Проверка генезис-блока (особые правила)
         if block.index == 0:
             return {
                 'is_valid': True,
-                'message': 'Генезис-блок (специальные правила)'
+                'message': 'Генезис-блок (специальные правила)',
+                'calculated_hash': block.hash,
+                'issue_type': None
             }
 
-        # Для обычных блоков
+        # 2. Проверка структуры транзакций
+        try:
+            transactions = json.loads(block.transactions)
+            if not isinstance(transactions, list):
+                return {
+                    'is_valid': False,
+                    'message': 'Неверный формат транзакций: ожидается список',
+                    'calculated_hash': None,
+                    'issue_type': 'invalid_transactions'
+                }
+        except json.JSONDecodeError:
+            return {
+                'is_valid': False,
+                'message': 'Не удалось декодировать транзакции (невалидный JSON)',
+                'calculated_hash': None,
+                'issue_type': 'invalid_json'
+            }
+
+        # 3. Расчет хэша блока
         block_obj = Block(
             index=block.index,
             timestamp=block.timestamp,
-            transactions=json.loads(block.transactions),
+            transactions=transactions,
             previous_hash=block.previous_hash
         )
         calculated_hash = block_obj.calculate_hash()
 
+        # 4. Проверка соответствия хэша
         if calculated_hash != block.hash:
             return {
                 'is_valid': False,
-                'message': f'Неверный хэш: рассчитано {calculated_hash}'
+                'message': f'Неверный хэш: рассчитано {calculated_hash[:8]}...{calculated_hash[-8:]}',
+                'calculated_hash': calculated_hash,
+                'issue_type': 'hash_mismatch'
             }
 
-        # Проверка связи с предыдущим блоком
+        # 5. Проверка связи с предыдущим блоком
         prev_block = BlockchainBlock.query.filter_by(
             index=block.index - 1,
             node_id=block.node_id
@@ -3084,35 +3121,73 @@ def verify_block_integrity(block):
         if not prev_block:
             return {
                 'is_valid': False,
-                'message': 'Предыдущий блок не найден'
+                'message': 'Предыдущий блок не найден',
+                'calculated_hash': calculated_hash,
+                'issue_type': 'missing_previous_block'
             }
-        
+
         if block.previous_hash != prev_block.hash:
             return {
                 'is_valid': False,
-                'message': f'Неверный previous_hash: ожидалось {prev_block.hash}'
+                'message': f'Неверный previous_hash: ожидалось {prev_block.hash[:8]}...{prev_block.hash[-8:]}',
+                'calculated_hash': calculated_hash,
+                'issue_type': 'previous_hash_mismatch'
             }
 
-        # Проверка подтверждений
-        confirmations = json.loads(block.confirmations or '[]')
-        total_nodes = len(NODE_DOMAINS)
-        required = (total_nodes - 1) // 3 * 2 + 1
-        
-        if len(confirmations) < required:
+        # 6. Проверка подтверждений (для PBFT)
+        try:
+            confirmations = json.loads(block.confirmations or '[]')
+            if not isinstance(confirmations, list):
+                return {
+                    'is_valid': False,
+                    'message': 'Неверный формат подтверждений',
+                    'calculated_hash': calculated_hash,
+                    'issue_type': 'invalid_confirmations'
+                }
+
+            total_nodes = len(NODE_DOMAINS)
+            required = (total_nodes - 1) // 3 * 2 + 1 if total_nodes > 1 else 1
+            
+            if len(confirmations) < required:
+                return {
+                    'is_valid': False,
+                    'message': f'Недостаточно подтверждений: {len(confirmations)}/{required}',
+                    'calculated_hash': calculated_hash,
+                    'issue_type': 'insufficient_confirmations'
+                }
+
+            # Проверка, что подтверждения пришли от известных узлов
+            invalid_nodes = set(confirmations) - set(NODE_DOMAINS.keys())
+            if invalid_nodes:
+                return {
+                    'is_valid': False,
+                    'message': f'Подтверждения от неизвестных узлов: {invalid_nodes}',
+                    'calculated_hash': calculated_hash,
+                    'issue_type': 'invalid_confirmation_nodes'
+                }
+
+        except json.JSONDecodeError:
             return {
                 'is_valid': False,
-                'message': f'Недостаточно подтверждений: {len(confirmations)}/{required}'
+                'message': 'Не удалось декодировать подтверждения',
+                'calculated_hash': calculated_hash,
+                'issue_type': 'invalid_confirmation_json'
             }
 
+        # 7. Все проверки пройдены
         return {
             'is_valid': True,
-            'message': 'Блок достоверен'
+            'message': 'Блок прошёл все проверки целостности',
+            'calculated_hash': calculated_hash,
+            'issue_type': None
         }
 
     except Exception as e:
         return {
             'is_valid': False,
-            'message': f'Ошибка проверки: {str(e)}'
+            'message': f'Критическая ошибка проверки: {str(e)}',
+            'calculated_hash': None,
+            'issue_type': 'verification_error'
         }
 
 @app.route('/test_verify_block/<int:block_index>')
