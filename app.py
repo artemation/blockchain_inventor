@@ -2831,8 +2831,15 @@ def get_block_verification(block_index):
 @app.route('/verify_block/<int:block_index>')
 @login_required
 def verify_block(block_index):
+    """
+    Комплексная проверка блока с анализом консенсуса в сети PBFT
+    Возвращает:
+    - Результат проверки локального блока
+    - Данные о проблемах на других узлах
+    - Общий статус валидности блока в сети
+    """
     try:
-        app.logger.debug(f"Verifying block #{block_index} for node {NODE_ID}")
+        app.logger.info(f"Starting verification for block #{block_index} on node {NODE_ID}")
         
         # 1. Получаем локальную копию блока
         local_block = BlockchainBlock.query.filter_by(
@@ -2841,7 +2848,7 @@ def verify_block(block_index):
         ).first()
 
         if not local_block:
-            app.logger.warning(f"Local block #{block_index} not found for node {NODE_ID}")
+            app.logger.warning(f"Local block #{block_index} not found on node {NODE_ID}")
             return jsonify({
                 'success': False,
                 'message': f'Локальная копия блока #{block_index} не найдена',
@@ -2849,175 +2856,127 @@ def verify_block(block_index):
                 'results': []
             }), 404
 
-        app.logger.debug(f"Local block #{block_index} found: hash={local_block.hash}, confirmations={local_block.confirmations}")
-
         # 2. Проверяем целостность локального блока
         local_integrity = verify_block_integrity(local_block)
-        local_hash = local_block.hash.lower()
-        local_calculated_hash = local_integrity.get('calculated_hash', local_hash).lower()
-        app.logger.debug(f"Local integrity check for block #{block_index}: {local_integrity}")
+        local_data = {
+            'node_id': NODE_ID,
+            'hash': local_block.hash,
+            'is_valid': local_integrity['is_valid'],
+            'message': local_integrity['message'],
+            'calculated_hash': local_integrity.get('calculated_hash'),
+            'confirmations': json.loads(local_block.confirmations or '[]'),
+            'issues': local_integrity.get('issues', [])
+        }
 
-        # 3. Получаем данные и результаты проверки от других узлов
-        other_blocks = []
-        other_verifications = []
-        nodes_to_fetch = [(nid, domain) for nid, domain in NODE_DOMAINS.items() if nid != NODE_ID]
-        app.logger.debug(f"Attempting to fetch data for block #{block_index} from nodes: {nodes_to_fetch}")
-
-        async def fetch_all_data():
+        # 3. Асинхронно собираем данные со всех узлов
+        async def fetch_network_data():
             async with aiohttp.ClientSession() as session:
-                block_tasks = [fetch_block_from_node(session, nid, domain, block_index) for nid, domain in nodes_to_fetch]
-                verification_tasks = [fetch_block_verification_from_node(session, nid, domain, block_index) for nid, domain in nodes_to_fetch]
-                return await asyncio.gather(*(block_tasks + verification_tasks), return_exceptions=True)
+                tasks = []
+                nodes_data = []
+                
+                for node_id, domain in NODE_DOMAINS.items():
+                    if node_id == NODE_ID:
+                        continue
+                        
+                    # Запрос полного блока
+                    block_url = f"https://{domain}/get_block/{block_index}"
+                    tasks.append(fetch_block_from_node(session, node_id, domain, block_index))
+                    
+                    # Запрос проверки блока
+                    verify_url = f"https://{domain}/get_block_verification/{block_index}"
+                    tasks.append(fetch_block_verification_from_node(session, node_id, domain, block_index))
+                
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Обрабатываем результаты
+                for i in range(0, len(results), 2):
+                    block_data = results[i]
+                    verify_data = results[i+1]
+                    
+                    if isinstance(block_data, Exception) or isinstance(verify_data, Exception):
+                        continue
+                        
+                    if block_data and verify_data:
+                        nodes_data.append({
+                            'node_id': block_data['node_id'],
+                            'block': block_data['data'],
+                            'verification': verify_data['data']
+                        })
+                
+                return nodes_data
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            results = loop.run_until_complete(fetch_all_data())
-            for result in results[:len(nodes_to_fetch)]:  # Блоки
-                if result is not None:
-                    other_blocks.append(result)
-            for result in results[len(nodes_to_fetch):]:  # Проверки
-                if result is not None:
-                    other_verifications.append(result)
+            network_data = loop.run_until_complete(fetch_network_data())
         finally:
             loop.close()
 
-        app.logger.debug(f"Fetched {len(other_blocks)} blocks and {len(other_verifications)} verifications for #{block_index}")
+        # 4. Анализируем консенсус
+        all_hashes = []
+        all_issues = []
+        valid_nodes = 0
+        
+        # Добавляем локальные данные
+        if local_data['is_valid']:
+            all_hashes.append(local_data['calculated_hash'] or local_data['hash'])
+            valid_nodes += 1
+        
+        # Анализируем данные с других узлов
+        for node in network_data:
+            if node['verification']['success'] and node['verification']['is_valid']:
+                all_hashes.append(node['verification']['calculated_hash'] or node['block']['hash'])
+                valid_nodes += 1
+            elif node['verification']['success']:
+                issue = {
+                    'node_id': node['node_id'],
+                    'message': node['verification']['message'],
+                    'expected_hash': node['verification'].get('calculated_hash'),
+                    'actual_hash': node['block'].get('hash')
+                }
+                all_issues.append(issue)
 
-        # 4. Собираем хэши и результаты проверки
-        all_verifications = [
-            {
-                'node_id': NODE_ID,
-                'is_valid': local_integrity['is_valid'],
-                'hash': local_hash,
-                'calculated_hash': local_calculated_hash,
-                'message': local_integrity['message'],
-                'confirmations': local_block.confirmations or []
-            }
-        ]
-        for verification in other_verifications:
-            if verification['data']['success']:
-                all_verifications.append({
-                    'node_id': verification['node_id'],
-                    'is_valid': verification['data']['is_valid'],
-                    'hash': verification['data']['hash'].lower(),
-                    'calculated_hash': verification['data']['calculated_hash'].lower(),
-                    'message': verification['data']['message'],
-                    'confirmations': verification['data']['confirmations']
-                })
-
-        app.logger.debug(f"All verifications for block #{block_index}: {all_verifications}")
-
-        # 5. Определяем консенсусный хэш (основываясь на calculated_hash валидных блоков)
-        valid_calculated_hashes = [v['calculated_hash'] for v in all_verifications if v['is_valid']]
-        if valid_calculated_hashes:
-            hash_counts = Counter(valid_calculated_hashes)
+        # 5. Определяем консенсусный хэш
+        consensus_hash = None
+        if all_hashes:
+            hash_counts = Counter(all_hashes)
             consensus_hash = hash_counts.most_common(1)[0][0]
-        else:
-            consensus_hash = None
-            app.logger.warning(f"No valid calculated hashes for block #{block_index}")
 
-        app.logger.debug(f"Consensus hash for block #{block_index}: {consensus_hash}")
+        # 6. Проверяем соответствие локального блока консенсусу
+        local_match_consensus = (
+            consensus_hash and 
+            (local_data['calculated_hash'] or local_data['hash']).lower() == consensus_hash.lower()
+        )
 
-        # 6. Проверяем расхождения
-        discrepancies = []
-        valid_copies = 0
-        consensus_reached = True
-        local_issue = None
-
-        for verification in all_verifications:
-            node_id = verification['node_id']
-            stored_hash = verification['hash']
-            calculated_hash = verification['calculated_hash']
-            is_valid = verification['is_valid']
-
-            if not is_valid:
-                consensus_reached = False
-                discrepancies.append({
-                    'node_id': node_id,
-                    'issue': 'hash_mismatch',
-                    'expected_hash': calculated_hash,
-                    'actual_hash': stored_hash,
-                    'message': verification['message']
-                })
-                if node_id == NODE_ID:
-                    local_issue = {
-                        'issue': 'hash_mismatch',
-                        'expected_hash': calculated_hash,
-                        'actual_hash': stored_hash,
-                        'message': verification['message']
-                    }
-            elif consensus_hash and stored_hash != consensus_hash:
-                consensus_reached = False
-                discrepancies.append({
-                    'node_id': node_id,
-                    'issue': 'hash_mismatch',
-                    'expected_hash': consensus_hash,
-                    'actual_hash': stored_hash,
-                    'message': 'Хэш не соответствует консенсусу'
-                })
-                if node_id == NODE_ID:
-                    local_issue = {
-                        'issue': 'hash_mismatch',
-                        'expected_hash': consensus_hash,
-                        'actual_hash': stored_hash,
-                        'message': 'Хэш не соответствует консенсусу'
-                    }
-            else:
-                valid_copies += 1
-
-        # 7. Проверяем подтверждения
-        local_conf = local_block.confirmations or []
-        if isinstance(local_conf, str):
-            local_confirmations = set(json.loads(local_conf))
-        else:
-            local_confirmations = set(local_conf)
-
-        for verification in all_verifications:
-            remote_conf = verification['confirmations']
-            if isinstance(remote_conf, str):
-                remote_confirmations = set(json.loads(remote_conf))
-            else:
-                remote_confirmations = set(remote_conf)
-            
-            if not remote_confirmations.issuperset(local_confirmations):
-                discrepancies.append({
-                    'node_id': verification['node_id'],
-                    'issue': 'missing_confirmations',
-                    'missing_nodes': list(local_confirmations - remote_confirmations)
-                })
-
-        # 8. Определяем общий статус
+        # 7. Определяем общий статус валидности
         total_nodes = len(NODE_DOMAINS)
-        required_confirmations = (total_nodes - 1) // 3 * 2 + 1 if total_nodes > 1 else 1
-        is_valid = local_integrity['is_valid'] and consensus_reached
+        required_confirmations = (total_nodes - 1) // 3 * 2 + 1
+        is_globally_valid = (
+            local_data['is_valid'] and 
+            valid_nodes >= required_confirmations and
+            local_match_consensus and
+            not all_issues
+        )
 
-        app.logger.debug(f"Verification result for block #{block_index}: is_valid={is_valid}, valid_copies={valid_copies}, required_confirmations={required_confirmations}, discrepancies={discrepancies}")
-
-        # 9. Формируем результат
+        # 8. Формируем итоговый результат
         result = {
             'block_index': block_index,
-            'local_block': {
-                'hash': local_block.hash,
-                'is_valid': local_integrity['is_valid'],
-                'message': local_integrity['message'],
-                'confirmations': list(local_confirmations),
-                'node_id': NODE_ID,
-                'issue': local_issue
-            },
+            'local_block': local_data,
             'network_status': {
                 'total_nodes': total_nodes,
-                'nodes_checked': len(other_verifications) + 1,
-                'valid_copies': valid_copies,
+                'nodes_checked': len(network_data) + 1,
+                'valid_copies': valid_nodes,
                 'required_confirmations': required_confirmations,
-                'consensus_reached': consensus_reached,
-                'discrepancies': discrepancies
+                'consensus_hash': consensus_hash,
+                'local_match_consensus': local_match_consensus,
+                'global_issues': all_issues,
+                'consensus_reached': is_globally_valid
             },
-            'overall_valid': is_valid
+            'overall_valid': is_globally_valid
         }
 
-        app.logger.debug(f"Returning result for block #{block_index}: {result}")
-
+        app.logger.info(f"Verification completed for block #{block_index}. Valid: {is_globally_valid}")
+        
         return jsonify({
             'success': True,
             'results': [result],
@@ -3025,10 +2984,10 @@ def verify_block(block_index):
         })
 
     except Exception as e:
-        app.logger.error(f"Error in verify_block #{block_index}: {str(e)}")
+        app.logger.error(f"Error in verify_block #{block_index}: {str(e)}", exc_info=True)
         return jsonify({
             'success': False,
-            'message': str(e),
+            'message': f"Internal server error: {str(e)}",
             'block_index': block_index,
             'results': []
         }), 500
