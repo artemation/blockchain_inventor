@@ -1249,50 +1249,86 @@
                         </div>
                     `;
                 } else {
-                    // Формируем детали ошибки
+                    // Формируем детали ошибки с полными данными
                     let detailsHtml = `
                         <div class="bg-light p-3 rounded mt-3 text-left">
                             <h6 class="font-weight-bold mb-3">Детали расхождения:</h6>
                             
                             <div class="mb-2">
                                 <span class="text-muted">Вычисленный хэш:</span>
-                                <code class="d-block mt-1">${response.details?.computed_hash || 'N/A'}</code>
+                                <code class="d-block mt-1">${response.details?.computed_hash || 'Недоступно'}</code>
                             </div>
                             <div class="mb-2">
                                 <span class="text-muted">Хранимый хэш:</span>
-                                <code class="d-block mt-1">${response.details?.stored_hash || 'N/A'}</code>
+                                <code class="d-block mt-1">${response.details?.stored_hash || 'Недоступно'}</code>
                             </div>
                             <div class="mb-2">
-                                <span class="text-muted">Timestamp в БД (raw):</span>
-                                <code class="d-block mt-1">${response.details?.db_timestamp_raw || 'N/A'}</code>
+                                <span class="text-muted">Timestamp:</span>
+                                <code class="d-block mt-1">${response.details?.timestamp || 'Недоступно'}</code>
                             </div>
                             <div class="mb-2">
-                                <span class="text-muted">Использованный timestamp:</span>
-                                <code class="d-block mt-1">${response.details?.timestamp_used || 'N/A'}</code>
+                                <span class="text-muted">User ID:</span>
+                                <span class="d-block mt-1">${response.details?.user_id || 'Недоступно'}</span>
+                            </div>
+                            <div class="mb-2">
+                                <span class="text-muted">View number:</span>
+                                <span class="d-block mt-1">${response.details?.view_number || 'Недоступно'}</span>
                             </div>`;
     
                     // Добавляем сериализованные данные
                     if (response.details?.serialized_data) {
-                        detailsHtml += `
-                            <div class="mt-3">
-                                <h6 class="font-weight-bold">Сериализованные данные:</h6>
-                                <pre class="bg-white p-2 rounded small">${response.details.serialized_data}</pre>
-                            </div>`;
+                        try {
+                            // Пытаемся распарсить JSON для красивого отображения
+                            const parsedData = JSON.parse(response.details.serialized_data);
+                            detailsHtml += `
+                                <div class="mt-3">
+                                    <h6 class="font-weight-bold">Сериализованные данные:</h6>
+                                    <pre class="bg-white p-2 rounded small">${JSON.stringify(parsedData, null, 2)}</pre>
+                                </div>`;
+                        } catch (e) {
+                            // Если не удалось распарсить, показываем как есть
+                            detailsHtml += `
+                                <div class="mt-3">
+                                    <h6 class="font-weight-bold">Сериализованные данные:</h6>
+                                    <pre class="bg-white p-2 rounded small">${response.details.serialized_data}</pre>
+                                </div>`;
+                        }
                     }
     
-                    // Добавляем возможные причины
-                    if (response.possible_reasons) {
-                        detailsHtml += `
-                            <div class="mt-3">
-                                <h6 class="font-weight-bold">Возможные причины:</h6>
-                                <ul class="small">`;
-                        
-                        response.possible_reasons.forEach(reason => {
-                            detailsHtml += `<li>${reason}</li>`;
-                        });
-                        
-                        detailsHtml += `</ul></div>`;
-                    }
+                    // Добавляем информацию о товаре и складах
+                    detailsHtml += `
+                        <div class="row mt-3">
+                            <div class="col-md-6">
+                                <h6 class="font-weight-bold">Данные о товаре:</h6>
+                                <div class="mb-1">
+                                    <span class="text-muted">Товар ID:</span>
+                                    <span class="float-right">${response.details?.ТоварID || 'Недоступно'}</span>
+                                </div>
+                                <div class="mb-1">
+                                    <span class="text-muted">Количество:</span>
+                                    <span class="float-right">${response.details?.Количество || 'Недоступно'}</span>
+                                </div>
+                                <div class="mb-1">
+                                    <span class="text-muted">Ед. измерения ID:</span>
+                                    <span class="float-right">${response.details?.Единица_ИзмеренияID || 'Недоступно'}</span>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <h6 class="font-weight-bold">Данные о складах:</h6>
+                                <div class="mb-1">
+                                    <span class="text-muted">Склад отправитель ID:</span>
+                                    <span class="float-right">${response.details?.СкладОтправительID || 'Недоступно'}</span>
+                                </div>
+                                <div class="mb-1">
+                                    <span class="text-muted">Склад получатель ID:</span>
+                                    <span class="float-right">${response.details?.СкладПолучательID || 'Недоступно'}</span>
+                                </div>
+                                <div class="mb-1">
+                                    <span class="text-muted">Документ ID:</span>
+                                    <span class="float-right">${response.details?.ДокументID || 'Недоступно'}</span>
+                                </div>
+                            </div>
+                        </div>`;
     
                     detailsHtml += `</div>`;
     
@@ -1301,6 +1337,15 @@
                             <i class="fas fa-times-circle fa-4x text-danger mb-3"></i>
                             <h5 class="font-weight-bold text-danger mb-3">${response.message}</h5>
                             ${detailsHtml}
+                            <div class="mt-3 text-left">
+                                <h6 class="font-weight-bold">Рекомендации:</h6>
+                                <ul class="small">
+                                    <li>Проверьте, что данные в базе не изменялись после создания транзакции</li>
+                                    <li>Убедитесь, что алгоритм хеширования одинаков на всех узлах</li>
+                                    <li>Проверьте кодировку данных при сериализации</li>
+                                    <li>Свяжитесь с администратором системы, если проблема повторяется</li>
+                                </ul>
+                            </div>
                         </div>
                     `;
                 }
