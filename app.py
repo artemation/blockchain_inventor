@@ -2324,7 +2324,7 @@ def check_data_integrity(record_id, transaction_data=None):
         if not record.TransactionHash:
             return {'success': False, 'message': "Отсутствует хэш транзакции"}
 
-        # Формируем данные в ТОЧНОМ формате, как при создании
+        # Формируем данные в ТОЧНОМ формате, как при создании в handle_request
         transaction_data = {
             'СкладОтправительID': int(record.СкладОтправительID),
             'СкладПолучательID': int(record.СкладПолучательID),
@@ -2332,25 +2332,25 @@ def check_data_integrity(record_id, transaction_data=None):
             'ТоварID': int(record.ТоварID),
             'Количество': float(record.Количество),
             'Единица_ИзмеренияID': int(record.Единица_ИзмеренияID),
-            'timestamp': record.Timestamp.isoformat(timespec='microseconds'),
-            'user_id': int(record.user_id)
+            'timestamp': record.Timestamp.replace(tzinfo=timezone.utc).isoformat(),
+            'user_id': int(record.user_id),
+            'view_number': int(record.view_number) if hasattr(record, 'view_number') else 0  # Предполагаем, что view_number хранится или 0
         }
 
-        # Критически важные параметры сериализации:
+        # Сериализация с параметрами, идентичными handle_request
         serialized_data = json.dumps(
             transaction_data,
-            sort_keys=True,          # Должно совпадать с apply_transaction
-            ensure_ascii=False,      # Должно совпадать
-            separators=(',', ':'),   # Без пробелов
-            indent=None              # Без отступов
+            sort_keys=True,
+            ensure_ascii=True,  # Синхронизация с handle_request
+            indent=None
         ).encode('utf-8')
 
         computed_hash = hashlib.sha256(serialized_data).hexdigest()
 
-        # Дебаг-логирование (удалить после отладки)
-        print(f"Computed hash: {computed_hash}")
-        print(f"Stored hash: {record.TransactionHash}")
-        print(f"Serialized data: {serialized_data.decode('utf-8')}")
+        # Дебаг-логирование
+        app.logger.debug(f"Computed hash: {computed_hash}")
+        app.logger.debug(f"Stored hash: {record.TransactionHash}")
+        app.logger.debug(f"Serialized data: {serialized_data.decode('utf-8')}")
 
         if computed_hash == record.TransactionHash:
             return {
@@ -2360,35 +2360,6 @@ def check_data_integrity(record_id, transaction_data=None):
                 'stored_hash': record.TransactionHash
             }
 
-        # Если не совпадает, пробуем альтернативные варианты
-        variants = [
-            {'name': 'Без микросекунд', 'timespec': 'seconds'},
-            {'name': 'UTC формат', 'modifier': lambda x: x.replace('+00:00', 'Z')},
-            {'name': 'Без timezone', 'modifier': lambda x: x.split('+')[0]}
-        ]
-
-        for variant in variants:
-            modified_data = transaction_data.copy()
-            if 'timespec' in variant:
-                modified_data['timestamp'] = record.Timestamp.isoformat(timespec=variant['timespec'])
-            elif 'modifier' in variant:
-                modified_data['timestamp'] = variant['modifier'](modified_data['timestamp'])
-            
-            variant_hash = hashlib.sha256(json.dumps(
-                modified_data,
-                sort_keys=True,
-                ensure_ascii=False,
-                separators=(',', ':')
-            ).encode('utf-8')).hexdigest()
-
-            if variant_hash == record.TransactionHash:
-                return {
-                    'success': True,
-                    'message': f"Целостность подтверждена ({variant['name']})",
-                    'computed_hash': variant_hash,
-                    'stored_hash': record.TransactionHash
-                }
-
         return {
             'success': False,
             'message': "Расхождение в хэшах",
@@ -2396,15 +2367,12 @@ def check_data_integrity(record_id, transaction_data=None):
                 'computed_hash': computed_hash,
                 'stored_hash': record.TransactionHash,
                 'serialized_data': serialized_data.decode('utf-8'),
-                'timestamp_variants': [
-                    record.Timestamp.isoformat(timespec='microseconds'),
-                    record.Timestamp.isoformat(timespec='seconds'),
-                    str(record.Timestamp)
-                ]
+                'timestamp': transaction_data['timestamp']
             }
         }
 
     except Exception as e:
+        app.logger.error(f"Ошибка в check_data_integrity: {str(e)}", exc_info=True)
         return {
             'success': False,
             'message': f"Ошибка: {str(e)}",
