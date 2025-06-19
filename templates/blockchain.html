@@ -850,7 +850,6 @@
     
         function processVerification() {
             if (verifiedBlocks === totalBlocks) {
-                // Сортируем результаты по номеру блока
                 results.sort((a, b) => {
                     const aIndex = parseInt(a.match(/Блок #(\d+)/)?.[1] || 0);
                     const bIndex = parseInt(b.match(/Блок #(\d+)/)?.[1] || 0);
@@ -878,14 +877,16 @@
                 url: `/verify_block/${blockIndex}`,
                 method: 'GET',
                 dataType: 'json',
+                timeout: 5000,
                 success: function(data) {
+                    console.log(`Ответ сервера для блока #${blockIndex}:`, data);
                     let resultHtml = '';
-                    if (data.success) {
-                        // Проверка целостности блока
+                    if (data.success && data.results && data.results.length > 0) {
+                        const result = data.results[0];
                         const isGenesis = blockIndex === 0;
-                        const isValid = data.overall_valid;
-                        const integrity = data.integrity_check;
-                        
+                        const isValid = result.overall_valid;
+                        const integrity = result.local_block;
+    
                         let statusHtml, cardClass;
                         if (isGenesis) {
                             statusHtml = `<span class="badge badge-info">Генезис-блок</span>`;
@@ -898,38 +899,6 @@
                             cardClass = 'border-danger';
                         }
     
-                        // Формируем HTML для транзакций
-                        let transactionsHtml = '';
-                        if (data.transactions_verified && data.transactions_verified.length > 0) {
-                            transactionsHtml = '<div class="mt-3"><h6>Проверка транзакций:</h6><ul class="list-group">';
-                            
-                            data.transactions_verified.forEach(tx => {
-                                const txStatus = tx.record_exists && tx.data_match;
-                                const txClass = txStatus ? 'list-group-item-success' : 'list-group-item-danger';
-                                const txIcon = txStatus ? 'fa-check' : 'fa-times';
-                                const txShortHash = tx.transaction_hash ? 
-                                    `${tx.transaction_hash.slice(0, 8)}...${tx.transaction_hash.slice(-8)}` : 
-                                    'Без хэша';
-                                
-                                let txDetails = '';
-                                if (!tx.record_exists) {
-                                    txDetails = '<small class="text-danger">Запись не найдена в ПриходРасход</small>';
-                                } else if (!tx.data_match) {
-                                    txDetails = '<small class="text-danger">Данные не соответствуют</small>';
-                                }
-                                
-                                transactionsHtml += `
-                                    <li class="list-group-item ${txClass}">
-                                        <i class="fas ${txIcon} mr-2"></i>
-                                        ${txShortHash}
-                                        ${txDetails}
-                                    </li>
-                                `;
-                            });
-                            
-                            transactionsHtml += '</ul></div>';
-                        }
-    
                         resultHtml = `
                             <div class="card mb-3 ${cardClass}">
                                 <div class="card-body">
@@ -940,7 +909,6 @@
                                         ${statusHtml}
                                         <span class="ml-2">${integrity.message}</span>
                                     </div>
-                                    ${transactionsHtml}
                                 </div>
                             </div>
                         `;
@@ -965,6 +933,7 @@
                     processVerification();
                 },
                 error: function(xhr, status, error) {
+                    console.error(`Ошибка AJAX для блока #${blockIndex}:`, error);
                     results.push(`
                         <div class="card mb-3 border-danger">
                             <div class="card-body">
@@ -985,7 +954,7 @@
     
     // Обработчик проверки отдельного блока (аналогичные улучшения)
     function verifySingleBlock(blockIndex) {
-        console.log(`Запуск проверки блока #${blockIndex}`); // Логирование
+        console.log(`Запуск проверки блока #${blockIndex}`);
         const verificationResults = $('#verificationResults');
         verificationResults.html(`
             <div class="text-center">
@@ -999,12 +968,23 @@
             url: `/verify_block/${blockIndex}`,
             method: 'GET',
             dataType: 'json',
+            timeout: 5000,
             success: function(data) {
-                console.log('Ответ сервера:', data); // Логирование ответа
+                console.log('Ответ сервера:', data);
                 let html = '<h4 class="mb-3"><i class="fas fa-cube mr-2"></i>Результаты проверки</h4>';
-                if (data.success && data.results?.length > 0) {
-                    // Обработка успешного ответа
-                    html += `<div class="alert alert-success">Блок проверен успешно!</div>`;
+                if (data.success && data.results && data.results.length > 0) {
+                    const result = data.results[0];
+                    const isValid = result.overall_valid;
+                    const integrity = result.local_block;
+                    const statusClass = isValid ? 'alert-success' : 'alert-danger';
+                    const statusIcon = isValid ? 'check-circle' : 'exclamation-circle';
+    
+                    html += `
+                        <div class="alert ${statusClass}">
+                            <i class="fas fa-${statusIcon} mr-2"></i>
+                            Блок #${blockIndex}: ${integrity.message}
+                        </div>
+                    `;
                 } else {
                     html += `
                         <div class="alert alert-danger">
@@ -1016,7 +996,7 @@
                 verificationResults.html(html);
             },
             error: function(xhr, status, error) {
-                console.error('Ошибка AJAX:', error); // Логирование ошибки
+                console.error('Ошибка AJAX:', error);
                 verificationResults.html(`
                     <div class="alert alert-danger">
                         <i class="fas fa-exclamation-circle mr-2"></i>
@@ -1031,7 +1011,6 @@
     $(document).ready(function() {
         $('#verifyChainBtn').click(verifyBlockchain);
     
-        // Добавляем кнопки проверки для каждого блока
         $('.block-card').each(function() {
             const blockIndex = $(this).data('block-index');
             $(this).find('.block-header').append(`
