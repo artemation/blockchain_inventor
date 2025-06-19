@@ -1548,79 +1548,6 @@ class Node:
         data = str(self.index) + str(self.timestamp) + json.dumps(self.transactions, sort_keys=True) + str(self.previous_hash)
         return hashlib.sha256(data.encode('utf-8')).hexdigest()
 
-    @staticmethod
-    def verify_block_integrity(block):
-        try:
-            if not block:
-                return False, "Блок не существует"
-            
-            if block.index == 0:
-                expected_data = {
-                    'index': 0,
-                    'timestamp': '2025-01-01T00:00:00+00:00',
-                    'transactions': [{"message": "Genesis Block"}],
-                    'previous_hash': "0"
-                }
-                
-                expected_hash = hashlib.sha256(json.dumps(expected_data, sort_keys=True).encode('utf-8')).hexdigest()
-                
-                if block.hash != expected_hash:
-                    return False, f"Неверный хеш генезис-блока: ожидалось {expected_hash}, получено {block.hash}"
-                
-                return True, "Генезис-блок достоверен"
-            
-            normalized_timestamp = block.timestamp.isoformat()
-            if block.timestamp and not block.timestamp.tzinfo:
-                normalized_timestamp = datetime.fromtimestamp(block.timestamp.timestamp(), tz=timezone.utc).isoformat()
-            
-            transactions = json.loads(block.transactions) if block.transactions else []
-            # Исключаем transaction_hash из транзакций
-            cleaned_transactions = [
-                {k: v for k, v in tx.items() if k != 'transaction_hash'}
-                for tx in transactions
-            ]
-            
-            block_data = {
-                'index': block.index,
-                'timestamp': normalized_timestamp,
-                'transactions': cleaned_transactions,
-                'previous_hash': block.previous_hash.strip()
-            }
-                
-            calculated_hash = hashlib.sha256(
-                json.dumps(block_data, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
-            ).hexdigest()
-            
-            if calculated_hash != block.hash:
-                return False, f"Хэш блока не совпадает: calculated_hash={calculated_hash}, expected_hash={block.hash}"
-            
-            if block.index > 0:
-                prev_block = BlockchainBlock.query.filter_by(
-                    index=block.index - 1,
-                    node_id=block.node_id
-                ).first()
-                
-                if not prev_block:
-                    return False, "Предыдущий блок не найден"
-                    
-                if block.previous_hash != prev_block.hash:
-                    return False, f"Неверный previous_hash: ожидалось {prev_block.hash}, получено {block.previous_hash}"
-            
-            confirmations = BlockchainBlock.query.filter_by(
-                index=block.index,
-                hash=block.hash
-            ).all()
-            
-            total_nodes = len(NODE_DOMAINS)
-            required_confirmations = (total_nodes - 1) // 3 * 2 + 1
-            
-            if len(confirmations) < required_confirmations:
-                return False, f"Недостаточно подтверждений: {len(confirmations)} из {required_confirmations}"
-            
-            return True, "Блок достоверен"
-            
-        except Exception as e:
-            return False, f"Ошибка при проверке блока: {str(e)}"
 
 # Создаем узлы блокчейна
 PORT = int(os.environ.get('PORT', 5000))
@@ -2787,7 +2714,6 @@ async def fetch_block_verification_from_node(session, node_id, domain, block_ind
         return None
 
 @app.route('/get_block_verification/<int:block_index>')
-@login_required
 def get_block_verification(block_index):
     """Маршрут для возврата результата проверки целостности блока."""
     try:
@@ -2812,7 +2738,7 @@ def get_block_verification(block_index):
             'is_valid': integrity['is_valid'],
             'message': integrity['message'],
             'hash': local_block.hash,
-            'calculated_hash': integrity.get('calculated_hash', local_block.hash),  # Рассчитанный хэш, если есть
+            'calculated_hash': integrity.get('calculated_hash', local_block.hash),
             'confirmations': local_block.confirmations or []
         }
 
