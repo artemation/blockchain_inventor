@@ -2944,7 +2944,7 @@ def verify_block_integrity(block):
                 }
             
             # Проверяем соответствие данных
-            if (record.СкладОтправительID != tx.get('СкладОтправительID') or
+            if  record.СкладОтправительID != tx.get('СкладОтправительID') or
                 record.СкладПолучательID != tx.get('СкладПолучательID') or
                 record.ТоварID != tx.get('ТоварID') or
                 float(record.Количество) != float(tx.get('Количество', 0)) or
