@@ -474,23 +474,23 @@ class Node:
         try:
             current_app.logger.debug(f"Узел {self.node_id} обрабатывает запрос от клиента: {sender_id}")
             current_app.logger.debug(f"Данные запроса: {request_data}")
-
+    
             # Синхронизируем блокчейн перед обработкой запроса
             await self.sync_blockchain()
             current_app.logger.debug(f"Узел {self.node_id} завершил синхронизацию блокчейна")
-
+    
             # Синхронизируем view_number
             await self.sync_view_number()
             current_app.logger.debug(f"Узел {self.node_id} имеет view_number: {self.view_number}")
-
+    
             if not self.is_leader:
                 leader_id = self.view_number % (len(self.nodes) + 1)
                 current_app.logger.debug(f"Узел {self.node_id} перенаправляет запрос лидеру {leader_id}")
-
+    
                 if leader_id in self.nodes:
                     url = f"https://{self.nodes[leader_id]}/handle_request"
                     payload = {'sender_id': sender_id, 'request_data': request_data}
-
+    
                     @retry(stop=stop_after_attempt(3), wait=wait_fixed(1))
                     async def send_to_leader():
                         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
@@ -502,7 +502,7 @@ class Node:
                                     error_text = await response.text()
                                     current_app.logger.error(f"Ошибка перенаправления лидеру {leader_id}: {error_text}")
                                     raise Exception(f"Ошибка HTTP {response.status}: {error_text}")
-
+    
                     try:
                         success, message = await send_to_leader()
                         return success, message
@@ -514,21 +514,21 @@ class Node:
                     current_app.logger.error(f"Лидер с ID {leader_id} не найден в списке узлов")
                     await self.initiate_view_change()
                     return False, "Лидер не найден, инициирована смена лидера"
-
+    
             current_app.logger.info(f"Узел {self.node_id} является лидером, обрабатывает запрос")
             self.sequence_number += 1
             sequence_number = self.sequence_number
-
+    
             request_data['timestamp'] = datetime.now(timezone.utc).isoformat()
             request_data['user_id'] = sender_id
             request_data['view_number'] = self.view_number
-            request_string = json.dumps(request_data, sort_keys=True)
+            request_string = json.dumps(request_data, sort_keys=True, ensure_ascii=True)
             current_app.logger.debug("Serialized data for hashing: %s", request_string)
             request_digest = self.generate_digest(request_string.encode('utf-8'))
-
+    
             self.requests[sequence_number] = request_string
             current_app.logger.debug(f"Создан запрос с номером последовательности {sequence_number}")
-
+    
             for node_id in self.nodes:
                 if node_id != self.node_id:
                     await self.send_message(node_id, 'Pre-prepare', {
@@ -537,17 +537,17 @@ class Node:
                         'request': request_string,
                         'view_number': self.view_number
                     })
-
+    
             self.pre_prepare(self.node_id, sequence_number, request_digest, request_string)
-
+    
             success, message = await self.apply_transaction(sequence_number, request_digest)
             if not success:
                 current_app.logger.error(f"Не удалось применить транзакцию: {message}")
                 return False, message
-
+    
             current_app.logger.info(f"Транзакция {sequence_number} успешно применена")
             return True, "Транзакция успешно применена"
-
+    
         except Exception as e:
             current_app.logger.error(f"Ошибка в handle_request на узле {self.node_id}: {str(e)}", exc_info=True)
             return False, f"Неожиданная ошибка: {str(e)}"
@@ -2327,31 +2327,30 @@ def check_data_integrity(record_id, transaction_data=None):
 
         # Формируем данные в ТОЧНОМ формате, как при создании в handle_request
         transaction_data = {
-            'СкладОтправительID': int(record.СкладОтправительID),
-            'СкладПолучательID': int(record.СкладПолучательID),
-            'ДокументID': int(record.ДокументID),
-            'ТоварID': int(record.ТоварID),
-            'Количество': float(record.Количество),
-            'Единица_ИзмеренияID': int(record.Единица_ИзмеренияID),
             'timestamp': record.Timestamp.replace(tzinfo=timezone.utc).isoformat(),
-            'user_id': int(record.user_id),
-            'view_number': int(record.view_number) if hasattr(record, 'view_number') else 0  # Предполагаем, что view_number хранится или 0
+            'user_id': record.user_id,
+            'ДокументID': record.ДокументID,
+            'Единица_ИзмеренияID': record.Единица_ИзмеренияID,
+            'Количество': float(record.Количество),  # Гарантируем float
+            'СкладОтправительID': record.СкладОтправительID,
+            'СкладПолучательID': record.СкладПолучательID,
+            'ТоварID': record.ТоварID
         }
 
         # Сериализация с параметрами, идентичными handle_request
         serialized_data = json.dumps(
             transaction_data,
             sort_keys=True,
-            ensure_ascii=True,  # Синхронизация с handle_request
+            ensure_ascii=True,
             indent=None
         ).encode('utf-8')
 
         computed_hash = hashlib.sha256(serialized_data).hexdigest()
 
         # Дебаг-логирование
-        app.logger.debug(f"Computed hash: {computed_hash}")
-        app.logger.debug(f"Stored hash: {record.TransactionHash}")
-        app.logger.debug(f"Serialized data: {serialized_data.decode('utf-8')}")
+        current_app.logger.debug(f"Computed hash: {computed_hash}")
+        current_app.logger.debug(f"Stored hash: {record.TransactionHash}")
+        current_app.logger.debug(f"Serialized data: {serialized_data.decode('utf-8')}")
 
         if computed_hash == record.TransactionHash:
             return {
@@ -2373,13 +2372,13 @@ def check_data_integrity(record_id, transaction_data=None):
         }
 
     except Exception as e:
-        app.logger.error(f"Ошибка в check_data_integrity: {str(e)}", exc_info=True)
+        current_app.logger.error(f"Ошибка в check_data_integrity: {str(e)}", exc_info=True)
         return {
             'success': False,
             'message': f"Ошибка: {str(e)}",
             'error_type': type(e).__name__
         }
-
+        
 @app.route('/check_integrity/<int:record_id>', methods=['POST'])
 @login_required
 def check_integrity_route(record_id):
