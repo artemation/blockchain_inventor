@@ -2944,11 +2944,13 @@ def verify_block_integrity(block):
                 }
             
             # Проверяем соответствие данных
-            if  record.СкладОтправительID != tx.get('СкладОтправительID') or
+            if (
+                record.СкладОтправительID != tx.get('СкладОтправительID') or
                 record.СкладПолучательID != tx.get('СкладПолучательID') or
                 record.ТоварID != tx.get('ТоварID') or
                 float(record.Количество) != float(tx.get('Количество', 0)) or
-                record.ДокументID != tx.get('ДокументID'):
+                record.ДокументID != tx.get('ДокументID')
+            ):
                 return {
                     'is_valid': False,
                     'message': f'Данные в блоке не соответствуют записи ПриходРасход для хэша {tx["transaction_hash"]}',
@@ -2956,7 +2958,7 @@ def verify_block_integrity(block):
                     'issue_type': 'data_mismatch'
                 }
 
-        # 3. Расчет хэша блока
+        # 4. Расчет хэша блока
         block_obj = Block(
             index=block.index,
             timestamp=block.timestamp,
@@ -2965,7 +2967,7 @@ def verify_block_integrity(block):
         )
         calculated_hash = block_obj.calculate_hash()
 
-        # 4. Проверка соответствия хэша
+        # 5. Проверка соответствия хэша
         if calculated_hash != block.hash:
             return {
                 'is_valid': False,
@@ -2974,7 +2976,7 @@ def verify_block_integrity(block):
                 'issue_type': 'hash_mismatch'
             }
 
-        # 5. Проверка связи с предыдущим блоком
+        # 6. Проверка связи с предыдущим блоком
         prev_block = BlockchainBlock.query.filter_by(
             index=block.index - 1,
             node_id=block.node_id
@@ -2996,7 +2998,7 @@ def verify_block_integrity(block):
                 'issue_type': 'previous_hash_mismatch'
             }
 
-        # 6. Проверка подтверждений (для PBFT)
+        # 7. Проверка подтверждений (для PBFT)
         try:
             confirmations = json.loads(block.confirmations or '[]')
             if not isinstance(confirmations, list):
@@ -3036,7 +3038,7 @@ def verify_block_integrity(block):
                 'issue_type': 'invalid_confirmation_json'
             }
 
-        # 7. Все проверки пройдены
+        # 8. Все проверки пройдены
         return {
             'is_valid': True,
             'message': 'Блок прошёл все проверки целостности',
