@@ -56,10 +56,10 @@ def datetimeformat(value, format='%d.%m.%Y %H:%M'):
 csrf = CSRFProtect(app)
 CORS(app)
 
-app.logger.setLevel(logging.DEBUG)  # Убедитесь, что уровень логирования установлен на DEBUG
+app.logger.setLevel(logging.DEBUG)  
 
 file_handler = RotatingFileHandler('app.log', maxBytes=1024 * 1024, backupCount=5)
-file_handler.setLevel(logging.DEBUG)  # Убедитесь, что уровень логирования для обработчика также установлен на DEBUG
+file_handler.setLevel(logging.DEBUG)  
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 file_handler.setFormatter(formatter)
 app.logger.addHandler(file_handler)
@@ -84,7 +84,6 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# Функция для отключения CSRF для определенных маршрутов
 
 
 @login_manager.user_loader
@@ -1921,12 +1920,15 @@ async def receive_message():
     if 'sender_id' not in message or 'block' not in message:
         return jsonify({"error": "Missing required fields in message"}), 400
     
-    # Здесь продолжается логика обработки сообщения, например:
-    sender_id = message['sender_id']
-    block = message['block']
-    # ... (остальная логика обработки блока, например, его валидация и добавление в цепочку)
+    # Получаем текущий узел из контекста приложения
+    from flask import g
+    if 'node' not in g:
+        return jsonify({"error": "Node not initialized"}), 500
+    node = g.node
     
-    return jsonify({"status": "Message received"}), 200
+    # Передаем сообщение в метод узла
+    await node.receive_message(message)
+    return jsonify({"status": "message received"}), 200
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
